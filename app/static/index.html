@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f7fb">
+    <meta name="description" content="Quản lý hồ sơ giảng viên và đơn vị công tác">
+    <title>Quản lý giảng viên</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="/" aria-label="Trang tổng quan">
+          <span class="brand-mark" aria-hidden="true">T</span>
+          <span class="brand-copy"><strong>Teacher<span>Hub</span></strong><small>QUẢN TRỊ NHÂN SỰ</small></span>
+        </a>
+
+        <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
+        <nav class="main-nav" aria-label="Điều hướng chính">
+          <button class="nav-link active" data-view="overview" type="button"><span class="nav-icon" aria-hidden="true">◫</span>Tổng quan</button>
+          <button class="nav-link" data-view="teachers" type="button"><span class="nav-icon" aria-hidden="true">♙</span>Giảng viên</button>
+          <button class="nav-link" data-view="departments" type="button"><span class="nav-icon" aria-hidden="true">▦</span>Khoa &amp; bộ môn</button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="sidebar-help">
+            <span class="help-icon" aria-hidden="true">i</span>
+            <div><strong>Đang phát triển</strong><p>Các tính năng sẽ được cập nhật theo từng giai đoạn.</p></div>
+          </div>
+          <div class="profile">
+            <div class="avatar">QT</div>
+            <div class="profile-copy"><strong>Quản trị viên</strong><small>Chế độ phát triển</small></div>
+            <span class="profile-menu" aria-hidden="true">···</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <button class="mobile-menu" id="mobile-menu" type="button" aria-label="Mở menu">☰</button>
+          <div class="breadcrumb"><span>Không gian làm việc</span><span class="crumb-separator">/</span><strong id="breadcrumb-current">Tổng quan</strong></div>
+          <div class="topbar-actions"><span class="environment-tag"><i></i> Môi trường thử nghiệm</span><span class="topbar-date" id="today-date"></span></div>
+        </header>
+
+        <div class="content">
+          <div class="security-notice" role="note">
+            <span aria-hidden="true">!</span>
+            <p><strong>Phiên bản thử nghiệm:</strong> Hệ thống chưa có đăng nhập và phân quyền. Chỉ sử dụng dữ liệu mẫu trên máy local.</p>
+          </div>
+
+          <section class="view-section" id="view-overview">
+            <div class="page-heading">
+              <div><div class="eyebrow">BẢNG ĐIỀU KHIỂN</div><h1>Chào mừng trở lại <span class="wave">✦</span></h1><p class="page-subtitle">Tổng quan nhanh về dữ liệu nhân sự trong hệ thống.</p></div>
+              <button class="button button-primary" type="button" data-action="add-teacher"><span class="button-plus">＋</span> Thêm giảng viên</button>
+            </div>
+
+            <div class="stats-grid">
+              <article class="stat-card">
+                <div class="stat-top"><span class="stat-label">Tổng giảng viên</span><span class="stat-icon icon-lilac" aria-hidden="true">♙</span></div>
+                <div class="stat-value" id="stat-total">—</div><div class="stat-foot"><span class="stat-dot dot-lilac"></span> Hồ sơ trong hệ thống</div>
+              </article>
+              <article class="stat-card">
+                <div class="stat-top"><span class="stat-label">Đang công tác</span><span class="stat-icon icon-green" aria-hidden="true">✓</span></div>
+                <div class="stat-value" id="stat-active">—</div><div class="stat-foot"><span class="stat-dot dot-green"></span> Trạng thái hoạt động</div>
+              </article>
+              <article class="stat-card">
+                <div class="stat-top"><span class="stat-label">Tạm ngừng</span><span class="stat-icon icon-amber" aria-hidden="true">Ⅱ</span></div>
+                <div class="stat-value" id="stat-paused">—</div><div class="stat-foot"><span class="stat-dot dot-amber"></span> Cần theo dõi</div>
+              </article>
+              <article class="stat-card">
+                <div class="stat-top"><span class="stat-label">Khoa &amp; bộ môn</span><span class="stat-icon icon-blue" aria-hidden="true">▦</span></div>
+                <div class="stat-value" id="stat-departments">—</div><div class="stat-foot"><span class="stat-dot dot-blue"></span> Đơn vị đang hoạt động</div>
+              </article>
+            </div>
+
+            <div class="overview-grid">
+              <section class="panel department-panel">
+                <div class="panel-heading"><div><h2>Giảng viên theo đơn vị</h2><p>Phân bổ nhân sự theo khoa và bộ môn</p></div><button class="text-button" type="button" data-navigate="departments">Xem đơn vị <span aria-hidden="true">→</span></button></div>
+                <div class="department-chart" id="department-chart"><div class="loading-state">Đang tải dữ liệu...</div></div>
+              </section>
+              <section class="panel quick-panel">
+                <div class="panel-heading"><div><h2>Truy cập nhanh</h2><p>Các thao tác thường dùng</p></div></div>
+                <button class="quick-link" type="button" data-action="add-teacher"><span class="quick-icon quick-icon-purple" aria-hidden="true">＋</span><span><strong>Thêm hồ sơ giảng viên</strong><small>Tạo hồ sơ nhân sự mới</small></span><b aria-hidden="true">→</b></button>
+                <button class="quick-link" type="button" data-navigate="teachers"><span class="quick-icon quick-icon-blue" aria-hidden="true">⌕</span><span><strong>Tra cứu hồ sơ</strong><small>Tìm theo tên hoặc mã giảng viên</small></span><b aria-hidden="true">→</b></button>
+                <button class="quick-link" type="button" data-action="add-department"><span class="quick-icon quick-icon-green" aria-hidden="true">▦</span><span><strong>Thêm đơn vị công tác</strong><small>Quản lý khoa và bộ môn</small></span><b aria-hidden="true">→</b></button>
+              </section>
+            </div>
+
+            <section class="panel recent-panel">
+              <div class="panel-heading"><div><h2>Giảng viên trong hệ thống</h2><p>Danh sách hồ sơ hiện có trong hệ thống</p></div><button class="text-button" type="button" data-navigate="teachers">Tất cả giảng viên <span aria-hidden="true">→</span></button></div>
+              <div class="table-wrap"><table><thead><tr><th>GIẢNG VIÊN</th><th>MÃ SỐ</th><th>KHOA / BỘ MÔN</th><th>TRÌNH ĐỘ</th><th>TRẠNG THÁI</th><th></th></tr></thead><tbody id="recent-teachers"><tr><td colspan="6"><div class="loading-state">Đang tải dữ liệu...</div></td></tr></tbody></table></div>
+            </section>
+          </section>
+
+          <section class="view-section hidden" id="view-teachers">
+            <div class="page-heading">
+              <div><div class="eyebrow">HỒ SƠ NHÂN SỰ</div><h1>Danh sách giảng viên</h1><p class="page-subtitle">Quản lý và tra cứu hồ sơ giảng viên trong hệ thống.</p></div>
+              <button class="button button-primary" type="button" data-action="add-teacher"><span class="button-plus">＋</span> Thêm giảng viên</button>
+            </div>
+            <section class="panel directory-panel">
+              <div class="filters">
+                <label class="search-box"><span aria-hidden="true">⌕</span><input id="teacher-search" type="search" placeholder="Tìm theo tên hoặc mã giảng viên" autocomplete="off"></label>
+                <label class="filter-control"><span class="sr-only">Lọc theo khoa</span><select id="filter-department"><option value="">Tất cả khoa / bộ môn</option></select></label>
+                <label class="filter-control"><span class="sr-only">Lọc theo trình độ</span><select id="filter-degree"><option value="">Tất cả trình độ</option></select></label>
+                <label class="filter-control"><span class="sr-only">Lọc theo trạng thái</span><select id="filter-status"><option value="">Tất cả trạng thái</option><option value="active">Đang công tác</option><option value="paused">Tạm ngừng</option><option value="ended">Đã kết thúc</option></select></label>
+              </div>
+              <div class="table-meta"><span id="teacher-count">Đang tải...</span><button class="text-button" id="clear-filters" type="button">Xóa bộ lọc</button></div>
+              <div class="table-wrap"><table><thead><tr><th>GIẢNG VIÊN</th><th>MÃ SỐ</th><th>KHOA / BỘ MÔN</th><th>TRÌNH ĐỘ</th><th>LIÊN HỆ</th><th>TRẠNG THÁI</th><th></th></tr></thead><tbody id="teacher-rows"><tr><td colspan="7"><div class="loading-state">Đang tải dữ liệu...</div></td></tr></tbody></table></div>
+              <div class="empty-state hidden" id="teacher-empty"><span aria-hidden="true">⌕</span><strong>Chưa tìm thấy giảng viên</strong><p>Thử thay đổi từ khóa hoặc bộ lọc.</p></div>
+            </section>
+          </section>
+
+          <section class="view-section hidden" id="view-departments">
+            <div class="page-heading">
+              <div><div class="eyebrow">CƠ CẤU TỔ CHỨC</div><h1>Khoa &amp; bộ môn</h1><p class="page-subtitle">Quản lý các đơn vị công tác và số lượng giảng viên.</p></div>
+              <button class="button button-primary" type="button" data-action="add-department"><span class="button-plus">＋</span> Thêm đơn vị</button>
+            </div>
+            <section class="panel directory-panel">
+              <div class="panel-heading department-list-heading"><div><h2>Danh sách đơn vị</h2><p>Đơn vị không hoạt động được lưu trữ, không xóa dữ liệu liên quan.</p></div><label class="toggle-control"><input type="checkbox" id="show-inactive"><span>Hiện đơn vị đã ngừng</span></label></div>
+              <div class="table-wrap"><table><thead><tr><th>MÃ ĐƠN VỊ</th><th>TÊN ĐƠN VỊ</th><th>MÔ TẢ</th><th>GIẢNG VIÊN</th><th>TRẠNG THÁI</th><th></th></tr></thead><tbody id="department-rows"><tr><td colspan="6"><div class="loading-state">Đang tải dữ liệu...</div></td></tr></tbody></table></div>
+              <div class="empty-state hidden" id="department-empty"><span aria-hidden="true">▦</span><strong>Chưa có đơn vị</strong><p>Thêm khoa hoặc bộ môn để bắt đầu quản lý hồ sơ.</p></div>
+            </section>
+          </section>
+
+          <footer class="footer"><span>TeacherHub <span id="footer-year"></span></span><span>Quản lý hồ sơ giảng viên</span></footer>
+        </div>
+      </main>
+    </div>
+
+    <div class="modal-backdrop hidden" id="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-header"><div><div class="eyebrow" id="modal-eyebrow">HỒ SƠ NHÂN SỰ</div><h2 id="modal-title">Thêm giảng viên</h2></div><button class="icon-button" id="modal-close" type="button" aria-label="Đóng">×</button></div>
+        <form id="teacher-form">
+          <input type="hidden" name="teacher_id">
+          <div class="form-grid">
+            <label class="form-field"><span>Mã giảng viên <b>*</b></span><input name="employee_code" required maxlength="40" autocomplete="off" placeholder="Ví dụ: GV001"></label>
+            <label class="form-field"><span>Họ và tên <b>*</b></span><input name="full_name" required maxlength="160" autocomplete="name" placeholder="Nhập họ và tên"></label>
+            <label class="form-field"><span>Khoa / bộ môn <b>*</b></span><select name="department_id" required><option value="">Chọn đơn vị</option></select></label>
+            <label class="form-field"><span>Trạng thái công tác</span><select name="employment_status"><option value="active">Đang công tác</option><option value="paused">Tạm ngừng</option><option value="ended">Đã kết thúc</option></select></label>
+            <label class="form-field"><span>Ngày sinh</span><input name="date_of_birth" type="date"></label>
+            <label class="form-field"><span>Giới tính</span><input name="gender" maxlength="40" placeholder="Không bắt buộc"></label>
+            <label class="form-field"><span>Email</span><input name="email" type="email" maxlength="254" autocomplete="email" placeholder="name@example.edu.vn"></label>
+            <label class="form-field"><span>Số điện thoại</span><input name="phone" type="tel" maxlength="30" autocomplete="tel" placeholder="Nhập số điện thoại"></label>
+            <label class="form-field"><span>Trình độ chuyên môn</span><input name="academic_degree" maxlength="80" placeholder="Ví dụ: Thạc sĩ"></label>
+            <label class="form-field"><span>Chức danh</span><input name="academic_title" maxlength="80" placeholder="Ví dụ: Giảng viên chính"></label>
+            <label class="form-field form-field-wide"><span>Địa chỉ</span><input name="address" maxlength="300" autocomplete="street-address" placeholder="Địa chỉ liên hệ"></label>
+          </div>
+          <div class="form-error hidden" id="form-error" role="alert"></div>
+          <div class="modal-actions"><button class="button button-secondary" id="modal-cancel" type="button">Hủy</button><button class="button button-primary" id="teacher-submit" type="submit">Lưu hồ sơ</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="department-backdrop" role="presentation">
+      <section class="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="department-modal-title">
+        <div class="modal-header"><div><div class="eyebrow">CƠ CẤU TỔ CHỨC</div><h2 id="department-modal-title">Thêm đơn vị</h2></div><button class="icon-button" id="department-modal-close" type="button" aria-label="Đóng">×</button></div>
+        <form id="department-form">
+          <input type="hidden" name="department_id">
+          <label class="form-field"><span>Mã đơn vị <b>*</b></span><input name="code" required maxlength="30" placeholder="Ví dụ: CNTT"></label>
+          <label class="form-field"><span>Tên đơn vị <b>*</b></span><input name="name" required maxlength="120" placeholder="Tên khoa hoặc bộ môn"></label>
+          <label class="form-field"><span>Mô tả</span><textarea name="description" rows="3" maxlength="500" placeholder="Thông tin mô tả (không bắt buộc)"></textarea></label>
+          <div class="form-error hidden" id="department-form-error" role="alert"></div>
+          <div class="modal-actions"><button class="button button-secondary" id="department-modal-cancel" type="button">Hủy</button><button class="button button-primary" id="department-submit" type="submit">Lưu đơn vị</button></div>
+        </form>
+      </section>
+    </div>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>
