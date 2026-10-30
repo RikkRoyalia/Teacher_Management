@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -88,6 +89,28 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/static/app.js").status_code, 200)
         self.assertEqual(self.client.get("/static/styles.css").status_code, 200)
         self.assertEqual(self.client.get("/static/favicon.svg").status_code, 200)
+        for path, nonce_element in (
+            ("/docs", "<script nonce="),
+            ("/redoc", "<style nonce="),
+        ):
+            with self.subTest(docs_path=path):
+                docs = self.client.get(path)
+                self.assertEqual(docs.status_code, 200)
+                self.assertIn("/openapi.json", docs.text)
+                csp = docs.headers["content-security-policy"]
+                nonce_match = re.search(r"'nonce-([^']+)'", csp)
+                self.assertIsNotNone(nonce_match)
+                self.assertIn(f'{nonce_element}"{nonce_match.group(1)}"', docs.text)
+                self.assertIn("https://cdn.jsdelivr.net", csp)
+                self.assertNotIn("'unsafe-inline'", csp.split("script-src", 1)[1].split(";", 1)[0])
+                style_policy = csp.split("style-src ", 1)[1].split(";", 1)[0]
+                if path == "/redoc":
+                    self.assertIn("'unsafe-inline'", style_policy)
+                else:
+                    self.assertNotIn("'unsafe-inline'", style_policy)
+        openapi = self.client.get("/openapi.json")
+        self.assertEqual(openapi.status_code, 200)
+        self.assertIn("script-src 'self';", openapi.headers["content-security-policy"])
         session = self.client.get("/auth/session")
         self.assertEqual(session.status_code, 200)
         self.assertEqual(session.json()["csrf_token"], self.csrf)

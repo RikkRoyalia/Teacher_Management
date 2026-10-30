@@ -18,7 +18,8 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from sqlalchemy import func, or_, select, update
@@ -125,6 +126,8 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         description="Hệ thống quản lý hồ sơ giảng viên, quy trình và báo cáo nội bộ.",
         version="1.0.0",
         lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
     )
     application.state.session_factory = session_factory
     application.state.upload_dir = UPLOAD_DIR
@@ -132,13 +135,33 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
+        csp_nonce = secrets.token_urlsafe(18)
+        request.state.csp_nonce = csp_nonce
         response = await call_next(request)
         response.headers.setdefault("Cache-Control", "no-store")
-        response.headers["Content-Security-Policy"] = (
+        content_security_policy = (
             "default-src 'self'; script-src 'self'; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
             "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         )
+        if request.url.path == "/docs":
+            content_security_policy = (
+                "default-src 'self'; "
+                f"script-src 'self' https://cdn.jsdelivr.net 'nonce-{csp_nonce}'; "
+                f"style-src 'self' https://cdn.jsdelivr.net 'nonce-{csp_nonce}'; "
+                "style-src-attr 'unsafe-inline'; img-src 'self' data:; "
+                "connect-src 'self'; object-src 'none'; base-uri 'self'; "
+                "form-action 'self'; frame-ancestors 'none'"
+            )
+        elif request.url.path == "/redoc":
+            content_security_policy = (
+                "default-src 'self'; "
+                f"script-src 'self' https://cdn.jsdelivr.net 'nonce-{csp_nonce}'; "
+                "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+                "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            )
+        response.headers["Content-Security-Policy"] = content_security_policy
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -147,6 +170,37 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     @application.get("/", include_in_schema=False)
     def frontend() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @application.get("/docs", include_in_schema=False)
+    def swagger_docs(request: Request) -> HTMLResponse:
+        page = get_swagger_ui_html(
+            openapi_url=application.openapi_url,
+            title=f"{application.title} - Swagger UI",
+            swagger_favicon_url="/static/favicon.svg",
+        )
+        content = page.body.decode("utf-8").replace(
+            "<script>",
+            f'<script nonce="{request.state.csp_nonce}">',
+        )
+        return HTMLResponse(content, status_code=page.status_code)
+
+    @application.get("/redoc", include_in_schema=False)
+    def redoc_docs(request: Request) -> HTMLResponse:
+        page = get_redoc_html(
+            openapi_url=application.openapi_url,
+            title=f"{application.title} - ReDoc",
+            redoc_favicon_url="/static/favicon.svg",
+            with_google_fonts=False,
+        )
+        content = page.body.decode("utf-8")
+        content = content.replace(
+            "<style>",
+            f'<style nonce="{request.state.csp_nonce}">',
+        ).replace(
+            "<script>",
+            f'<script nonce="{request.state.csp_nonce}">',
+        )
+        return HTMLResponse(content, status_code=page.status_code)
 
     @application.get("/health", tags=["system"])
     def health_check() -> dict[str, str]:
