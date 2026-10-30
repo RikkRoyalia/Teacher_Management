@@ -3,3 +3,8 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 teacher_management.db
+teacher_management.db-shm
+teacher_management.db-wal
+.backups/
+private_uploads/
+.env
