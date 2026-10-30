@@ -4,6 +4,7 @@ const state = {
   currentView: "overview",
   teachers: [],
   departments: [],
+  users: [],
   selectedTeacherId: "",
   contractWarningDays: 30,
 };
@@ -20,7 +21,7 @@ const viewTitles = {
   changes: "Yêu cầu thay đổi",
   checklist: "Checklist hồ sơ",
   reports: "Báo cáo nhân sự",
-  accounts: "Tài khoản",
+  accounts: "Quản trị hệ thống",
   audit: "Nhật ký hoạt động",
 };
 
@@ -57,6 +58,47 @@ function makeElement(tag, className = "", text = "") {
   if (className) element.className = className;
   if (text !== undefined && text !== null) element.textContent = String(text);
   return element;
+}
+
+function addPasswordToggle(input) {
+  const field = input.closest(".form-field");
+  if (!field || input.dataset.passwordToggle) return;
+
+  input.dataset.passwordToggle = "true";
+  input.id ||= `password-field-${crypto.randomUUID()}`;
+  const container = makeElement("div", "form-field password-field");
+  const label = makeElement(
+    "label",
+    "form-field-label",
+    field.querySelector(":scope > span").textContent,
+  );
+  label.htmlFor = input.id;
+  const control = makeElement("div", "password-input-wrap");
+  const toggle = makeElement("button", "password-toggle", "Hiện");
+  toggle.type = "button";
+  toggle.setAttribute("aria-label", "Hiện mật khẩu");
+  toggle.setAttribute("aria-pressed", "false");
+  toggle.addEventListener("click", () => {
+    const showPassword = input.type === "password";
+    input.type = showPassword ? "text" : "password";
+    toggle.textContent = showPassword ? "Ẩn" : "Hiện";
+    toggle.setAttribute("aria-label", `${showPassword ? "Ẩn" : "Hiện"} mật khẩu`);
+    toggle.setAttribute("aria-pressed", String(showPassword));
+  });
+
+  field.replaceWith(container);
+  control.append(input, toggle);
+  container.append(label, control);
+}
+
+function resetPasswordToggles(form) {
+  $$('[data-password-toggle="true"]', form).forEach((input) => {
+    if (input.type === "text") input.type = "password";
+    const toggle = input.closest(".password-input-wrap").querySelector("button");
+    toggle.textContent = "Hiện";
+    toggle.setAttribute("aria-label", "Hiện mật khẩu");
+    toggle.setAttribute("aria-pressed", "false");
+  });
 }
 
 function initials(name = "") {
@@ -131,6 +173,11 @@ async function api(path, options = {}) {
 }
 
 async function refreshData() {
+  if (state.user.role === "admin") {
+    state.departments = [];
+    state.teachers = [];
+    return;
+  }
   const [departments, teachers] = await Promise.all([
     api("/departments?include_inactive=true").catch(() => []),
     state.user.role === "hr" ? api("/teachers").catch(() => []) : Promise.resolve([]),
@@ -168,7 +215,7 @@ function workspaceDescription(view) {
     changes: "Thay đổi quan trọng chỉ cập nhật hồ sơ chính thức sau khi duyệt.",
     checklist: "Checklist có thể cấu hình; tài liệu nhạy cảm không bắt buộc mặc định.",
     reports: "Số liệu thể hiện điều kiện lọc; vai trò quản lý chỉ xem tổng hợp.",
-    accounts: "Quản trị viên quản lý tài khoản và vai trò, không duyệt nghiệp vụ.",
+    accounts: "Quản lý tài khoản và vai trò; tài khoản bị khóa được giữ lại để bảo toàn lịch sử và nhật ký.",
     audit: "Nhật ký chỉ đọc, ghi nhận các thao tác quan trọng.",
   };
   return descriptions[view] || "";
@@ -761,32 +808,162 @@ async function renderReports() {
 
 async function renderAccounts() {
   const users = await api("/users");
-  setTable(
-    ["Tên tài khoản", "Họ tên", "Vai trò", "Trạng thái", "Tạo lúc", "Thao tác"],
-    users.map((user) => [
-      user.username,
-      user.full_name,
-      roleLabels[user.role] || user.role,
-      user.is_active ? "Đang hoạt động" : "Đã khóa",
-      new Date(user.created_at).toLocaleString("vi-VN"),
-      makeAccountActions(user),
-    ]),
+  state.users = users;
+  const activeUsers = users.filter((user) => user.is_active);
+  const statistics = makeElement("div", "stats-grid account-stats");
+  [
+    ["Tổng tài khoản", users.length],
+    ["Đang hoạt động", activeUsers.length],
+    ["Đã khóa", users.length - activeUsers.length],
+    ["Quản trị viên", activeUsers.filter((user) => user.role === "admin").length],
+  ].forEach(([label, value]) => {
+    const card = makeElement("article", "stat-card account-stat-card");
+    card.append(
+      makeElement("div", "stat-label", label),
+      makeElement("div", "stat-value", value),
+    );
+    statistics.append(card);
+  });
+  $("#workspace-form-region").append(statistics);
+
+  const createForm = document.createElement("form");
+  createForm.className = "inline-form admin-account-form";
+  createForm.append(makeElement("strong", "", "Tạo tài khoản"));
+  const username = inputField({ name: "username", label: "Tên tài khoản", required: true });
+  username.querySelector("input").maxLength = 80;
+  username.querySelector("input").autocomplete = "off";
+  const fullName = inputField({ name: "full_name", label: "Họ tên", required: true });
+  fullName.querySelector("input").maxLength = 160;
+  const password = inputField({
+    name: "password",
+    label: "Mật khẩu (ít nhất 12 ký tự)",
+    type: "password",
+    required: true,
+  });
+  password.querySelector("input").minLength = 12;
+  password.querySelector("input").maxLength = 256;
+  password.querySelector("input").autocomplete = "new-password";
+  const role = inputField({
+    name: "role",
+    label: "Vai trò",
+    type: "select",
+    required: true,
+    options: [
+      ["hr", "Nhân viên nhân sự"],
+      ["manager", "Người quản lý"],
+      ["admin", "Quản trị viên"],
+    ],
+  });
+  createForm.append(username, fullName, password, role);
+  addPasswordToggle(password.querySelector("input"));
+  const createButton = makeElement("button", "button button-primary", "Tạo tài khoản");
+  createButton.type = "submit";
+  createForm.append(createButton);
+  createForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    try {
+      await api("/users", { method: "POST", body: JSON.stringify(values) });
+      showToast("Đã tạo tài khoản.");
+      await renderWorkspace();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+  const accountNote = makeElement(
+    "p",
+    "account-management-note",
+    "Tài khoản không bị xóa vĩnh viễn để giữ nguyên lịch sử thao tác. Hãy khóa tài khoản khi người dùng không còn quyền truy cập.",
   );
-  $("#workspace-form-region").append(buildForm([
-    { name: "username", label: "Tên tài khoản", required: true },
-    { name: "full_name", label: "Họ tên", required: true },
-    { name: "password", label: "Mật khẩu (ít nhất 12 ký tự)", type: "password", required: true },
-    { name: "role", label: "Vai trò", type: "select", required: true, options: [["hr", "Nhân viên nhân sự"], ["manager", "Người quản lý"], ["admin", "Quản trị viên"]] },
-  ], "Tạo tài khoản", async (values) => {
-    await api("/users", { method: "POST", body: JSON.stringify(values) });
-  }));
+  $("#workspace-form-region").append(createForm, accountNote);
+
+  const search = makeElement("input", "workspace-search");
+  search.type = "search";
+  search.placeholder = "Tìm tên, họ tên hoặc vai trò";
+  search.setAttribute("aria-label", "Tìm tài khoản");
+  const roleFilter = document.createElement("select");
+  roleFilter.setAttribute("aria-label", "Lọc theo vai trò");
+  roleFilter.append(new Option("Tất cả vai trò", ""));
+  for (const [value, label] of [
+    ["admin", "Quản trị viên"],
+    ["hr", "Nhân viên nhân sự"],
+    ["manager", "Người quản lý"],
+  ]) {
+    roleFilter.add(new Option(label, value));
+  }
+  const statusFilter = document.createElement("select");
+  statusFilter.setAttribute("aria-label", "Lọc theo trạng thái");
+  statusFilter.append(
+    new Option("Tất cả trạng thái", ""),
+    new Option("Đang hoạt động", "active"),
+    new Option("Đã khóa", "inactive"),
+  );
+  $("#workspace-filters").append(search, roleFilter, statusFilter);
+  const drawRows = () => {
+    const query = search.value.trim().toLocaleLowerCase("vi");
+    const filtered = users.filter((user) =>
+      `${user.username} ${user.full_name} ${roleLabels[user.role] || user.role}`
+        .toLocaleLowerCase("vi")
+        .includes(query)
+      && (!roleFilter.value || user.role === roleFilter.value)
+      && (!statusFilter.value || user.is_active === (statusFilter.value === "active")),
+    );
+    setTable(
+      ["Tên tài khoản", "Họ tên", "Vai trò", "Trạng thái", "Tạo lúc", "Thao tác"],
+      filtered.map((user) => [
+        user.username,
+        user.full_name,
+        roleLabels[user.role] || user.role,
+        user.is_active ? "Đang hoạt động" : "Đã khóa",
+        new Date(user.created_at).toLocaleString("vi-VN"),
+        makeAccountActions(user),
+      ]),
+    );
+  };
+  search.addEventListener("input", drawRows);
+  roleFilter.addEventListener("change", drawRows);
+  statusFilter.addEventListener("change", drawRows);
+  drawRows();
+}
+
+function openAccountModal(user) {
+  const form = $("#account-form");
+  form.reset();
+  clearError($("#account-form-error"));
+  form.elements.user_id.value = user.id;
+  form.elements.username.value = user.username;
+  form.elements.full_name.value = user.full_name;
+  form.elements.role.value = user.role;
+  $("#account-modal-title").textContent = `Chỉnh sửa tài khoản ${user.username}`;
+  $("#account-backdrop").classList.remove("hidden");
+}
+
+function closeAccountModal() {
+  $("#account-backdrop").classList.add("hidden");
+  $("#account-form").reset();
+}
+
+async function updateAccount(userId, changes) {
+  await api(`/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+  });
+  await renderWorkspace();
 }
 
 function makeAccountActions(user) {
-  const actions = document.createElement("div");
-  actions.append(actionButton("Đổi vai trò", "change-user-role", user.id));
-  actions.append(actionButton(user.is_active ? "Khóa" : "Mở khóa", "toggle-user", user.id));
-  return actions;
+  const edit = actionButton("Chỉnh sửa", "edit-account", user.id);
+  const toggle = actionButton(
+    user.is_active ? "Khóa" : "Mở khóa",
+    "toggle-user",
+    user.id,
+  );
+  if (user.id === state.user.id && user.is_active) {
+    toggle.disabled = true;
+    toggle.title = "Bạn không thể tự khóa tài khoản đang đăng nhập.";
+  }
+  return actionGroup([edit, toggle]);
 }
 
 async function renderAudit() {
@@ -944,8 +1121,9 @@ function openDepartmentModal(department = null) {
 function bindEvents() {
   $("#login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const form = event.currentTarget;
     clearError($("#login-error"));
-    const data = new FormData(event.currentTarget);
+    const data = new FormData(form);
     try {
       const response = await fetch("/auth/login", {
         method: "POST",
@@ -955,7 +1133,8 @@ function bindEvents() {
       });
       const user = await response.json();
       if (!response.ok) throw new Error(user.detail || "Không thể đăng nhập.");
-      event.currentTarget.reset();
+      resetPasswordToggles(form);
+      form.reset();
       showApp(user);
     } catch (error) {
       showError($("#login-error"), error.message);
@@ -972,12 +1151,19 @@ function bindEvents() {
     }
   });
   $("#password-button").addEventListener("click", () => {
-    $("#password-form").reset();
+    const form = $("#password-form");
+    resetPasswordToggles(form);
+    form.reset();
     clearError($("#password-error"));
     $("#password-backdrop").classList.remove("hidden");
   });
-  $("#password-close").addEventListener("click", () => $("#password-backdrop").classList.add("hidden"));
-  $("#password-cancel").addEventListener("click", () => $("#password-backdrop").classList.add("hidden"));
+  const closePasswordModal = () => {
+    resetPasswordToggles($("#password-form"));
+    $("#password-form").reset();
+    $("#password-backdrop").classList.add("hidden");
+  };
+  $("#password-close").addEventListener("click", closePasswordModal);
+  $("#password-cancel").addEventListener("click", closePasswordModal);
   $("#password-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -989,7 +1175,7 @@ function bindEvents() {
           new_password: data.get("new_password"),
         }),
       });
-      $("#password-backdrop").classList.add("hidden");
+      closePasswordModal();
       showLogin();
       showToast("Mật khẩu đã đổi. Đăng nhập lại bằng mật khẩu mới.");
     } catch (error) {
@@ -1041,6 +1227,24 @@ function bindEvents() {
   });
   $("#modal-close").addEventListener("click", closeTeacherModal);
   $("#modal-cancel").addEventListener("click", closeTeacherModal);
+  $("#account-modal-close").addEventListener("click", closeAccountModal);
+  $("#account-modal-cancel").addEventListener("click", closeAccountModal);
+  $("#account-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const userId = form.elements.user_id.value;
+    const payload = {
+      full_name: form.elements.full_name.value,
+      role: form.elements.role.value,
+    };
+    try {
+      await updateAccount(userId, payload);
+      closeAccountModal();
+      showToast("Đã cập nhật tài khoản.");
+    } catch (error) {
+      showError($("#account-form-error"), error.message);
+    }
+  });
   $("#department-modal-close").addEventListener("click", () => $("#department-backdrop").classList.add("hidden"));
   $("#department-modal-cancel").addEventListener("click", () => $("#department-backdrop").classList.add("hidden"));
 
@@ -1177,25 +1381,20 @@ function bindEvents() {
           break;
         }
         case "toggle-user": {
-          const users = await api("/users");
-          const user = users.find((entry) => entry.id === id);
-          await api(`/users/${id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ is_active: !user.is_active }),
-          });
-          await renderWorkspace();
+          const user = state.users.find((entry) => entry.id === id);
+          if (!user) throw new Error("Không tìm thấy tài khoản cần cập nhật.");
+          if (
+            user.is_active
+            && !window.confirm(`Khóa tài khoản "${user.username}"?`)
+          ) break;
+          await updateAccount(id, { is_active: !user.is_active });
+          showToast(user.is_active ? "Đã khóa tài khoản." : "Đã mở khóa tài khoản.");
           break;
         }
-        case "change-user-role": {
-          const users = await api("/users");
-          const user = users.find((entry) => entry.id === id);
-          const role = window.prompt("Vai trò: admin, hr hoặc manager", user?.role || "hr");
-          if (!role || !["admin", "hr", "manager"].includes(role)) break;
-          await api(`/users/${id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ role }),
-          });
-          await renderWorkspace();
+        case "edit-account": {
+          const user = state.users.find((entry) => entry.id === id);
+          if (!user) throw new Error("Không tìm thấy tài khoản cần cập nhật.");
+          openAccountModal(user);
           break;
         }
         default:
@@ -1212,6 +1411,7 @@ async function initialize() {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
   $("#footer-year").textContent = String(new Date().getFullYear());
+  $$('input[type="password"]').forEach(addPasswordToggle);
   bindEvents();
   try {
     const user = await api("/auth/session");

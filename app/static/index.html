@@ -43,7 +43,7 @@
           <button class="nav-link" data-view="changes" data-roles="hr,manager" type="button">Yêu cầu thay đổi</button>
           <button class="nav-link" data-view="checklist" data-roles="hr" type="button">Checklist hồ sơ</button>
           <button class="nav-link" data-view="reports" data-roles="hr,manager" type="button">Báo cáo</button>
-          <button class="nav-link" data-view="accounts" data-roles="admin" type="button">Tài khoản</button>
+          <button class="nav-link" data-view="accounts" data-roles="admin" type="button">Quản trị hệ thống</button>
           <button class="nav-link" data-view="audit" data-roles="admin" type="button">Nhật ký hoạt động</button>
         </nav>
         <div class="sidebar-bottom">
@@ -118,6 +118,19 @@
           <label class="form-field"><span>Mô tả</span><textarea name="description" rows="3" maxlength="500"></textarea></label>
           <div class="form-error hidden" id="department-form-error" role="alert"></div>
           <div class="modal-actions"><button class="button button-secondary" id="department-modal-cancel" type="button">Hủy</button><button class="button button-primary" id="department-submit" type="submit">Lưu đơn vị</button></div>
+        </form>
+      </section>
+    </div>
+    <div class="modal-backdrop hidden" id="account-backdrop" role="presentation">
+      <section class="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+        <div class="modal-header"><div><div class="eyebrow">QUẢN TRỊ HỆ THỐNG</div><h2 id="account-modal-title">Chỉnh sửa tài khoản</h2></div><button class="icon-button" id="account-modal-close" type="button" aria-label="Đóng">×</button></div>
+        <form id="account-form">
+          <input type="hidden" name="user_id">
+          <label class="form-field"><span>Tên tài khoản</span><input name="username" readonly></label>
+          <label class="form-field"><span>Họ tên <b>*</b></span><input name="full_name" required maxlength="160"></label>
+          <label class="form-field"><span>Vai trò <b>*</b></span><select name="role" required><option value="hr">Nhân viên nhân sự</option><option value="manager">Người quản lý</option><option value="admin">Quản trị viên</option></select></label>
+          <div class="form-error hidden" id="account-form-error" role="alert"></div>
+          <div class="modal-actions"><button class="button button-secondary" id="account-modal-cancel" type="button">Hủy</button><button class="button button-primary" type="submit">Lưu thay đổi</button></div>
         </form>
       </section>
     </div>

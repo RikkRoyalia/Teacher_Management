@@ -351,6 +351,14 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             )
             if active_admins <= 1:
                 raise HTTPException(status_code=409, detail="At least one active administrator is required.")
+        if (
+            ("is_active" in changes and changes["is_active"] != target.is_active)
+            or ("role" in changes and changes["role"] != target.role)
+        ):
+            for login_session in db.scalars(
+                select(LoginSession).where(LoginSession.user_id == target.id)
+            ):
+                db.delete(login_session)
         for field, value in changes.items():
             setattr(target, field, value)
         record_audit(db, actor, "user_updated", "user", target.id, details=changes)

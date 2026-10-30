@@ -10,4 +10,4 @@ if (-not (Test-Path $python)) {
 
 Write-Host "Starting Teacher Management at http://127.0.0.1:8000/"
 Write-Host "This server is bound to this computer only. Press Ctrl+C to stop."
-& $python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& $python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

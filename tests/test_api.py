@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from app.main import create_app
 from app.models import User
-from app.security import hash_password
+from app.security import SESSION_COOKIE, hash_password
 
 
 class TeacherManagementApiTests(unittest.TestCase):
@@ -82,6 +82,8 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("TeacherHub", page.text)
         self.assertIn('id="teacher-form"', page.text)
+        self.assertIn('id="account-form"', page.text)
+        self.assertIn("Quản trị hệ thống", page.text)
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
         self.assertEqual(self.client.get("/static/app.js").status_code, 200)
         self.assertEqual(self.client.get("/static/styles.css").status_code, 200)
@@ -143,6 +145,15 @@ class TeacherManagementApiTests(unittest.TestCase):
             headers={"X-CSRF-Token": admin["csrf_token"]},
         )
         self.assertEqual(response.status_code, 201, response.text)
+        account_id = response.json()["id"]
+        updated_account = self.client.patch(
+            f"/users/{account_id}",
+            json={"full_name": "Updated User", "role": "manager"},
+            headers={"X-CSRF-Token": admin["csrf_token"]},
+        )
+        self.assertEqual(updated_account.status_code, 200, updated_account.text)
+        self.assertEqual(updated_account.json()["full_name"], "Updated User")
+        self.assertEqual(updated_account.json()["role"], "manager")
         self.assertEqual(
             self.client.post(
                 "/departments",
@@ -164,6 +175,71 @@ class TeacherManagementApiTests(unittest.TestCase):
             ).status_code,
             200,
         )
+
+    def test_account_access_changes_revoke_all_existing_sessions(self) -> None:
+        def sign_in(username: str) -> tuple[dict[str, object], str]:
+            response = self.client.post(
+                "/auth/login",
+                json={
+                    "username": username,
+                    "password": "Correct horse battery staple 2048!",
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            session_token = response.cookies.get(SESSION_COOKIE)
+            self.assertIsNotNone(session_token)
+            return response.json(), session_token
+
+        _, first_hr_session = sign_in("hr")
+        _, second_hr_session = sign_in("hr")
+        admin, admin_session = sign_in("admin")
+        admin_headers = {
+            "X-CSRF-Token": admin["csrf_token"],
+            "Cookie": f"{SESSION_COOKIE}={admin_session}",
+        }
+        users = self.client.get("/users", headers=admin_headers)
+        self.assertEqual(users.status_code, 200, users.text)
+        hr_id = next(user["id"] for user in users.json() if user["username"] == "hr")
+
+        deactivated = self.client.patch(
+            f"/users/{hr_id}",
+            json={"is_active": False},
+            headers=admin_headers,
+        )
+        self.assertEqual(deactivated.status_code, 200, deactivated.text)
+        reactivated = self.client.patch(
+            f"/users/{hr_id}",
+            json={"is_active": True},
+            headers=admin_headers,
+        )
+        self.assertEqual(reactivated.status_code, 200, reactivated.text)
+        for old_session in (first_hr_session, second_hr_session):
+            with self.subTest(session="revoked after reactivation"):
+                response = self.client.get(
+                    "/auth/session",
+                    headers={"Cookie": f"{SESSION_COOKIE}={old_session}"},
+                )
+                self.assertEqual(response.status_code, 401)
+
+        _, previous_hr_session = sign_in("hr")
+        role_change = self.client.patch(
+            f"/users/{hr_id}",
+            json={"role": "manager"},
+            headers=admin_headers,
+        )
+        self.assertEqual(role_change.status_code, 200, role_change.text)
+        stale_role_session = self.client.get(
+            "/auth/session",
+            headers={"Cookie": f"{SESSION_COOKIE}={previous_hr_session}"},
+        )
+        self.assertEqual(stale_role_session.status_code, 401)
+        manager, manager_session = sign_in("hr")
+        self.assertEqual(manager["role"], "manager")
+        manager_headers = {
+            "X-CSRF-Token": manager["csrf_token"],
+            "Cookie": f"{SESSION_COOKIE}={manager_session}",
+        }
+        self.assertEqual(self.client.get("/teachers", headers=manager_headers).status_code, 403)
 
     def test_department_hierarchy_and_deactivation(self) -> None:
         child = self.client.post(

@@ -20,7 +20,7 @@ python -m venv .venv
 .\scripts\start_local.ps1
 ```
 
-Lệnh bootstrap yêu cầu nhập mật khẩu quản trị viên tương tác, không tạo tài khoản/mật khẩu mặc định. Sau khi đăng nhập, quản trị viên tạo tài khoản cho nhân viên nhân sự và người quản lý. Người dùng phải đổi mật khẩu khi cần từ luồng tài khoản của mình/API.
+Lệnh bootstrap chỉ dùng để tạo tài khoản quản trị viên đầu tiên, yêu cầu nhập mật khẩu tương tác và không tạo tài khoản/mật khẩu mặc định. Sau khi đăng nhập, quản trị viên có thể tạo, chỉnh sửa vai trò và khóa/mở khóa tài khoản trực tiếp trong mục **Quản trị hệ thống**; không cần chạy lệnh terminal để tạo các tài khoản thường. Tài khoản bị khóa được giữ lại để bảo toàn lịch sử và nhật ký.
 
 - Web: <http://127.0.0.1:8000/>
 - Health check: <http://127.0.0.1:8000/health>

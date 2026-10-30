@@ -173,9 +173,16 @@ th:first-child, td:first-child { padding-left: 18px; }
 .icon-button:hover { background: #f7f7fa; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 12px; }
 .form-field { display: grid; gap: 6px; margin-bottom: 12px; color: #666a7d; font-size: 10px; font-weight: 600; }
+.form-field-label { color: #666a7d; font-size: 10px; font-weight: 600; }
+.form-field-label b { color: #d76d6d; }
 .form-grid .form-field { margin: 0; }
 .form-field > span b { color: #d76d6d; }
 .form-field input, .form-field select, .form-field textarea { width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid #e7e8ef; border-radius: 6px; outline: none; background: white; color: #44475b; font-size: 11px; font-weight: 400; }
+.password-input-wrap { display: flex; min-width: 0; }
+.password-input-wrap input { min-width: 0; flex: 1; border-radius: 6px 0 0 6px; }
+.password-input-wrap input:focus { position: relative; z-index: 1; }
+.password-toggle { min-width: 49px; padding: 0 9px; border: 1px solid #e7e8ef; border-left: 0; border-radius: 0 6px 6px 0; background: white; color: var(--purple); font-size: 10px; font-weight: 600; }
+.password-toggle:hover { background: #f8f7ff; }
 .form-field textarea { min-height: auto; resize: vertical; }
 .form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: #9388e8; box-shadow: 0 0 0 3px #8274e51a; }
 .form-field input::placeholder, .form-field textarea::placeholder { color: #b1b3bf; }
@@ -283,6 +290,10 @@ th:first-child, td:first-child { padding-left: 18px; }
 .workspace-actions { display: flex; gap: 7px; }
 .inline-form { display: flex; flex-wrap: wrap; align-items: end; gap: 9px; margin: 14px 0; padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: #fcfcfe; }
 .inline-form > strong { flex: 1 0 100%; color: #4a4d62; font-size: 11px; }
+.account-stats { margin-bottom: 14px; }
+.account-stat-card { min-height: 96px; }
+.account-stat-card .stat-value { margin-top: 9px; }
+.account-management-note { margin: 0 0 14px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .inline-form .form-field { flex: 1 1 150px; margin: 0; }
 .inline-form input:not([type="checkbox"]), .inline-form select { min-width: 130px; min-height: 34px; padding: 7px 9px; border: 1px solid #e7e8ef; border-radius: 6px; background: white; font-size: 11px; }
 .inline-form input[type="file"] { flex: 1 1 230px; }

@@ -30,5 +30,5 @@
 | ------------ | ------------------- |
 | Bắt buộc | Phải có tài liệu mới được xác nhận hồ sơ đầy đủ |
 | Có điều kiện | HR xác định có áp dụng hay không cho từng giảng viên |
-Tùy chọn | Không làm hồ sơ bị đánh dấu thiếu nếu chưa có |
+| Tùy chọn | Không làm hồ sơ bị đánh dấu thiếu nếu chưa có |
 | Không áp dụng | Loại khỏi checklist của giảng viên tương ứng |
