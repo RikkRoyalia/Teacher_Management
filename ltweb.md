@@ -221,11 +221,14 @@ Các yêu cầu cụ thể:
 
 * Quản lý tài khoản người dùng.  
 * Gán vai trò cho tài khoản.  
-* Phân biệt quyền của quản trị viên, cán bộ nhân sự và cán bộ quản lý.  
+* Phân biệt quyền của quản trị viên, cán bộ nhân sự, cán bộ quản lý và giảng viên.
 * Kiểm tra quyền khi người dùng truy cập chức năng hoặc thực hiện thao tác dữ liệu.  
 * Hạn chế truy cập hồ sơ và tài liệu ngoài phạm vi được phép.  
 * Ngăn người dùng tự nâng quyền hoặc sửa đổi quyền của chính mình trái phép.  
 * Ghi nhận các thao tác quản lý tài khoản và phân quyền quan trọng.
+* Quản trị viên tạo tài khoản giảng viên và liên kết tài khoản với hồ sơ đã có; mỗi hồ sơ chỉ liên kết với tối đa một tài khoản giảng viên.
+* Giảng viên chỉ xem hồ sơ đã liên kết và nộp tài liệu minh chứng cho hồ sơ đó; không được tự sửa thông tin hồ sơ chính thức.
+* Tài liệu do giảng viên nộp ở trạng thái chờ nhân sự rà soát; chỉ tài liệu được xác nhận mới được tính vào mức độ hoàn thiện hồ sơ.
 
 Quy tắc nghiệp vụ:
 
@@ -264,10 +267,11 @@ Quy tắc nghiệp vụ:
 
 * Đăng nhập bằng tên tài khoản và mật khẩu.  
 * Đăng xuất khỏi hệ thống.  
-* Phân quyền theo 3 vai trò: Quản trị viên, Nhân viên nhân sự, Người quản lý.  
+* Phân quyền theo 4 vai trò: Quản trị viên, Nhân viên nhân sự, Người quản lý và Giảng viên.
 * Chỉ cho phép người dùng truy cập các chức năng phù hợp với vai trò.  
 * Kiểm tra thông tin đăng nhập và thông báo khi sai tài khoản hoặc mật khẩu.  
 * Đổi mật khẩu tài khoản.
+* Giảng viên xem hồ sơ cá nhân được liên kết và tải lên tài liệu minh chứng để nhân sự rà soát.
 
 ## **2\. Quản lý hồ sơ giảng viên**
 
@@ -367,4 +371,3 @@ Ví dụ: Hồ sơ giảng viên Nguyễn Văn A còn thiếu email và file min
 * Lưu loại thao tác: thêm, sửa, xóa, duyệt hoặc từ chối.  
 * Ghi nhận đối tượng dữ liệu bị tác động.  
 * Cho phép quản trị viên tìm kiếm lịch sử theo tài khoản, thời gian hoặc loại thao tác.
-

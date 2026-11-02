@@ -33,13 +33,14 @@ Lệnh bootstrap chỉ dùng để tạo tài khoản quản trị viên đầu 
 - **Quản trị viên (`admin`)**: tạo/khóa tài khoản, gán vai trò và xem nhật ký. Không mặc nhiên có quyền xem/sửa hồ sơ hoặc duyệt thay đổi nghiệp vụ.
 - **Nhân viên nhân sự (`hr`)**: quản lý hồ sơ/đơn vị, hợp đồng, bằng cấp, tài liệu và checklist; gửi và theo dõi yêu cầu thay đổi của mình.
 - **Người quản lý (`manager`)**: xem số liệu tổng hợp, xem và xử lý yêu cầu đang chờ. Không được duyệt yêu cầu do chính mình tạo.
+- **Giảng viên (`lecturer`)**: admin tạo tài khoản và liên kết với hồ sơ có sẵn; giảng viên chỉ xem hồ sơ của mình, nộp/tải tài liệu minh chứng và không sửa dữ liệu chính thức.
 
 Quyền được kiểm tra ở API. Tác vụ thay đổi yêu cầu session cookie và CSRF token. Mật khẩu được băm PBKDF2-HMAC-SHA256; sau nhiều lần đăng nhập sai tài khoản sẽ tạm khóa.
 
 ## Lưu trữ, tài liệu và dữ liệu
 
 - Mặc định, SQLite là `teacher_management.db` tại thư mục chạy ứng dụng; có thể cấu hình `DATABASE_URL`.
-- Tệp minh chứng lưu trong `private_uploads/`, không được mount như tài nguyên tĩnh. API chỉ cho HR tải lên/tải xuống PDF, PNG và JPEG tối đa 10 MB.
+- Tệp minh chứng lưu trong `private_uploads/`, không được mount như tài nguyên tĩnh. HR có thể tải lên/tải xuống; giảng viên chỉ tải lên theo checklist và truy cập tài liệu thuộc hồ sơ đã liên kết. Chỉ PDF, PNG và JPEG tối đa 10 MB được chấp nhận. Tài liệu giảng viên nộp chờ HR xác nhận; tài liệu chưa được xác nhận không hoàn tất checklist.
 - Checklist có danh mục mẫu từ `ho_so_giang_vien.md`, gồm phân loại và điều kiện áp dụng. Khi tạo hồ sơ giảng viên, HR phải rà soát từng mục có điều kiện/bắt buộc để chọn bắt buộc, tùy chọn hoặc không áp dụng; chỉ tài liệu đã xác định là bắt buộc mới ảnh hưởng trạng thái đầy đủ. Mục tùy chọn không bắt buộc mặc định; giấy tờ định danh, bảo hiểm/thuế và ảnh được đánh dấu nhạy cảm. Danh mục và điều kiện có thể cấu hình, không áp dụng cho nhân viên không giảng dạy.
 - Hợp đồng sắp hết hạn mặc định được cảnh báo trước 30 ngày; cấu hình bằng `PUT /settings/contract-warning-days`. Cảnh báo không tự gia hạn hoặc đổi trạng thái.
 - Bằng cấp/chứng chỉ có thể lưu ngày hết hạn; cảnh báo chứng chỉ mặc định trước 30 ngày, HR có thể cấu hình trong trang tổng quan hoặc qua `PUT /settings/certificate-warning-days`.

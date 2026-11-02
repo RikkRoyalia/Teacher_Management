@@ -20,9 +20,15 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role IN ('admin', 'hr', 'manager')",
+            "role IN ('admin', 'hr', 'manager', 'lecturer')",
             name="ck_user_role",
         ),
+        CheckConstraint(
+            "(role = 'lecturer' AND teacher_id IS NOT NULL) "
+            "OR (role != 'lecturer' AND teacher_id IS NULL)",
+            name="ck_user_teacher_link",
+        ),
+        UniqueConstraint("teacher_id", name="uq_user_teacher"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -30,6 +36,9 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(160))
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+    teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("teachers.id", ondelete="RESTRICT"), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -240,6 +249,12 @@ class TeacherChecklistRequirement(Base):
 
 class EvidenceDocument(Base):
     __tablename__ = "evidence_documents"
+    __table_args__ = (
+        CheckConstraint(
+            "review_status IN ('pending', 'approved', 'rejected')",
+            name="ck_evidence_document_review_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id", ondelete="RESTRICT"), index=True)
@@ -257,6 +272,16 @@ class EvidenceDocument(Base):
     content_type: Mapped[str] = mapped_column(String(100))
     size_bytes: Mapped[int] = mapped_column(Integer)
     uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    review_status: Mapped[str] = mapped_column(
+        String(20), default="approved", nullable=False
+    )
+    review_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )

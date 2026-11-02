@@ -40,13 +40,21 @@ class UserCreate(InputModel):
     username: str = Field(min_length=3, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
     full_name: str = Field(min_length=1, max_length=160)
     password: str = Field(min_length=12, max_length=256)
-    role: Literal["admin", "hr", "manager"]
+    role: Literal["admin", "hr", "manager", "lecturer"]
+    teacher_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_teacher_link(self) -> "UserCreate":
+        if (self.role == "lecturer") != (self.teacher_id is not None):
+            raise ValueError("Lecturer accounts must be linked to one teacher profile.")
+        return self
 
 
 class UserUpdate(InputModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
-    role: Literal["admin", "hr", "manager"] | None = None
+    role: Literal["admin", "hr", "manager", "lecturer"] | None = None
     is_active: bool | None = None
+    teacher_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def require_changes(self) -> "UserUpdate":
@@ -65,6 +73,7 @@ class UserRead(BaseModel):
     username: str
     full_name: str
     role: str
+    teacher_id: int | None
     is_active: bool
     created_at: datetime
 
@@ -409,7 +418,22 @@ class EvidenceDocumentRead(BaseModel):
     content_type: str
     size_bytes: int
     uploaded_by: int
+    review_status: Literal["pending", "approved", "rejected"]
+    review_reason: str | None
+    reviewed_by: int | None
+    reviewed_at: datetime | None
     created_at: datetime
+
+
+class EvidenceDocumentReview(InputModel):
+    review_status: Literal["approved", "rejected"]
+    reason: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_rejection_reason(self) -> "EvidenceDocumentReview":
+        if self.review_status == "rejected" and not self.reason:
+            raise ValueError("A reason is required when rejecting a document.")
+        return self
 
 
 class ContractAlert(BaseModel):

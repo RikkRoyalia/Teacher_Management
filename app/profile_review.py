@@ -59,6 +59,7 @@ def teacher_completeness(
             select(EvidenceDocument.checklist_item_id).where(
                 EvidenceDocument.teacher_id == teacher.id,
                 EvidenceDocument.checklist_item_id.is_not(None),
+                EvidenceDocument.review_status == "approved",
             )
         )
     )

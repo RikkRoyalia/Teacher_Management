@@ -84,6 +84,7 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertIn("TeacherHub", page.text)
         self.assertIn('id="teacher-form"', page.text)
         self.assertIn('id="account-form"', page.text)
+        self.assertIn('data-view="lecturer"', page.text)
         self.assertIn("Quản trị hệ thống", page.text)
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
         self.assertEqual(self.client.get("/static/app.js").status_code, 200)
@@ -197,6 +198,173 @@ class TeacherManagementApiTests(unittest.TestCase):
                 headers={"X-CSRF-Token": manager["csrf_token"]},
             ).status_code,
             200,
+        )
+
+    def test_lecturer_account_scope_and_document_review(self) -> None:
+        teacher_id = self.create_teacher().json()["id"]
+        other_teacher_id = self.create_teacher("T002").json()["id"]
+        checklist = self.client.post(
+            "/checklist-items",
+            json={
+                "code": "lecturer-upload-proof",
+                "label": "Minh chứng giảng viên",
+                "category": "qualification",
+                "classification": "required",
+                "applicability": "Áp dụng cho hồ sơ này.",
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(checklist.status_code, 201, checklist.text)
+        self.assertEqual(
+            self.client.patch(
+                f"/teachers/{teacher_id}/checklist-requirements/{checklist.json()['id']}",
+                json={"status": "required"},
+                headers=self.headers(),
+            ).status_code,
+            200,
+        )
+        other_document = self.client.post(
+            f"/teachers/{other_teacher_id}/documents",
+            files={"file": ("other.pdf", b"%PDF-1.4\nother", "application/pdf")},
+            headers=self.headers(),
+        )
+        self.assertEqual(other_document.status_code, 201, other_document.text)
+
+        admin = self.login("admin")
+        self.csrf = str(admin["csrf_token"])
+        linkable = self.client.get("/users/linkable-teachers")
+        self.assertEqual(linkable.status_code, 200, linkable.text)
+        self.assertEqual(
+            {teacher["id"] for teacher in linkable.json()},
+            {teacher_id, other_teacher_id},
+        )
+        account = self.client.post(
+            "/users",
+            json={
+                "username": "lecturer-one",
+                "full_name": "Lecturer One",
+                "password": "Another safe password 456!",
+                "role": "lecturer",
+                "teacher_id": teacher_id,
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(account.status_code, 201, account.text)
+        self.assertEqual(account.json()["teacher_id"], teacher_id)
+        duplicate = self.client.post(
+            "/users",
+            json={
+                "username": "lecturer-duplicate",
+                "full_name": "Duplicate Lecturer",
+                "password": "Another safe password 789!",
+                "role": "lecturer",
+                "teacher_id": teacher_id,
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(duplicate.status_code, 409)
+        available = self.client.get("/users/linkable-teachers")
+        self.assertEqual(
+            {teacher["id"] for teacher in available.json()},
+            {other_teacher_id},
+        )
+
+        lecturer = self.login("lecturer-one", "Another safe password 456!")
+        self.csrf = str(lecturer["csrf_token"])
+        self.assertEqual(lecturer["teacher_id"], teacher_id)
+        self.assertEqual(
+            self.client.get("/lecturer/profile").json()["id"], teacher_id
+        )
+        self.assertEqual(self.client.get("/teachers").status_code, 403)
+        self.assertEqual(
+            self.client.get(f"/teachers/{other_teacher_id}/documents").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/documents/{other_document.json()['id']}/download"
+            ).status_code,
+            404,
+        )
+        first_upload = self.client.post(
+            f"/teachers/{teacher_id}/documents",
+            data={"checklist_item_id": checklist.json()["id"]},
+            files={"file": ("proof.pdf", b"%PDF-1.4\nproof", "application/pdf")},
+            headers=self.headers(),
+        )
+        self.assertEqual(first_upload.status_code, 201, first_upload.text)
+        self.assertEqual(first_upload.json()["review_status"], "pending")
+        self.assertIn(
+            "Minh chứng giảng viên",
+            self.client.get(f"/teachers/{teacher_id}/completeness").json()["missing"],
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/teachers/{other_teacher_id}/documents",
+                data={"checklist_item_id": checklist.json()["id"]},
+                files={"file": ("proof.pdf", b"%PDF-1.4\nproof", "application/pdf")},
+                headers=self.headers(),
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post("/auth/logout", headers=self.headers()).status_code,
+            200,
+        )
+
+        hr = self.login("hr")
+        self.csrf = str(hr["csrf_token"])
+        no_reason = self.client.patch(
+            f"/documents/{first_upload.json()['id']}/review",
+            json={"review_status": "rejected"},
+            headers=self.headers(),
+        )
+        self.assertEqual(no_reason.status_code, 422)
+        rejected = self.client.patch(
+            f"/documents/{first_upload.json()['id']}/review",
+            json={"review_status": "rejected", "reason": "Tệp chưa rõ nội dung."},
+            headers=self.headers(),
+        )
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        self.assertEqual(rejected.json()["review_status"], "rejected")
+        self.assertEqual(
+            self.client.patch(
+                f"/documents/{first_upload.json()['id']}/review",
+                json={"review_status": "approved"},
+                headers=self.headers(),
+            ).status_code,
+            409,
+        )
+
+        lecturer = self.login("lecturer-one", "Another safe password 456!")
+        self.csrf = str(lecturer["csrf_token"])
+        second_upload = self.client.post(
+            f"/teachers/{teacher_id}/documents",
+            data={"checklist_item_id": checklist.json()["id"]},
+            files={"file": ("proof.pdf", b"%PDF-1.4\nproof2", "application/pdf")},
+            headers=self.headers(),
+        )
+        self.assertEqual(second_upload.status_code, 201, second_upload.text)
+        self.assertEqual(
+            self.client.patch(
+                f"/documents/{second_upload.json()['id']}/review",
+                json={"review_status": "approved"},
+                headers=self.headers(),
+            ).status_code,
+            403,
+        )
+        self.client.post("/auth/logout", headers=self.headers())
+
+        hr = self.login("hr")
+        self.csrf = str(hr["csrf_token"])
+        approved = self.client.patch(
+            f"/documents/{second_upload.json()['id']}/review",
+            json={"review_status": "approved"},
+            headers=self.headers(),
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertTrue(
+            self.client.get(f"/teachers/{teacher_id}/completeness").json()["is_complete"]
         )
 
     def test_account_access_changes_revoke_all_existing_sessions(self) -> None:

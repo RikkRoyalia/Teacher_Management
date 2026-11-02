@@ -19,6 +19,7 @@ const viewTitles = {
   overview: "Tổng quan",
   teachers: "Hồ sơ giảng viên",
   teacherDetail: "Chi tiết hồ sơ giảng viên",
+  lecturer: "Hồ sơ của tôi",
   departments: "Khoa & bộ môn",
   changes: "Yêu cầu thay đổi",
   reports: "Báo cáo nhân sự",
@@ -30,6 +31,7 @@ const roleLabels = {
   admin: "Quản trị viên",
   hr: "Nhân viên nhân sự",
   manager: "Người quản lý",
+  lecturer: "Giảng viên",
 };
 const statusLabels = {
   active: "Đang công tác",
@@ -166,7 +168,7 @@ function showApp(user) {
   });
   $("#theme-fab").classList.remove("hidden");
   startNotifications();
-  navigate("overview");
+  navigate(user.role === "lecturer" ? "lecturer" : "overview");
 }
 
 async function api(path, options = {}) {
@@ -206,7 +208,7 @@ async function api(path, options = {}) {
 }
 
 async function refreshData() {
-  if (state.user.role === "admin") {
+  if (state.user.role === "admin" || state.user.role === "lecturer") {
     state.departments = [];
     state.teachers = [];
     return;
@@ -250,6 +252,7 @@ function navigate(view) {
 
 function workspaceDescription(view) {
   const descriptions = {
+    lecturer: "Xem hồ sơ cá nhân và nộp minh chứng để nhân sự rà soát.",
     teachers: "Tìm kiếm, lọc và quản lý hồ sơ giảng viên.",
     departments:
       "Quản lý cây đơn vị; đơn vị đã tham chiếu được lưu trữ thay vì xóa.",
@@ -770,6 +773,7 @@ async function renderWorkspace() {
     reports: renderReports,
     accounts: renderAccounts,
     audit: renderAudit,
+    lecturer: renderLecturerPortal,
   };
   await renderers[state.currentView]?.();
 }
@@ -854,6 +858,124 @@ async function renderTeachers() {
     control.addEventListener("change", drawRows),
   );
   drawRows();
+}
+
+async function renderLecturerPortal() {
+  const [teacher, requirements, documents, completeness] = await Promise.all([
+    api("/lecturer/profile"),
+    api(`/teachers/${state.user.teacher_id}/checklist-requirements`),
+    api(`/teachers/${state.user.teacher_id}/documents`),
+    api(`/teachers/${state.user.teacher_id}/completeness`),
+  ]);
+  const info = makeElement("dl", "info-grid");
+  [
+    ["Mã giảng viên", teacher.employee_code],
+    ["Họ và tên", teacher.full_name],
+    ["Đơn vị ID", teacher.department_id],
+    ["Trạng thái công tác", statusLabels[teacher.employment_status]],
+    ["Email", teacher.email],
+    ["Số điện thoại", teacher.phone],
+    ["Trình độ", teacher.academic_degree],
+    ["Chức danh", teacher.academic_title],
+  ].forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.append(makeElement("dt", "", label), makeElement("dd", "", value || "—"));
+    info.append(row);
+  });
+  $("#workspace-form-region").append(info);
+  $("#workspace-form-region").append(
+    makeElement(
+      "p",
+      "page-subtitle",
+      completeness.is_complete
+        ? "Hồ sơ đã đầy đủ theo các yêu cầu được rà soát."
+        : `Hồ sơ chưa đầy đủ. Còn thiếu: ${completeness.missing.join(", ") || "không có"}. ` +
+            `Cần HR rà soát: ${completeness.needs_review.join(", ") || "không có"}.`,
+    ),
+  );
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  form.append(makeElement("strong", "", "Nộp tài liệu minh chứng"));
+  const checklistLabel = makeElement("label", "form-field");
+  checklistLabel.append(makeElement("span", "", "Mục hồ sơ"));
+  const checklistSelect = document.createElement("select");
+  checklistSelect.required = true;
+  checklistSelect.append(new Option("Chọn mục cần nộp", ""));
+  requirements
+    .filter((item) => item.status !== "not_applicable")
+    .forEach((item) =>
+      checklistSelect.add(new Option(item.label, String(item.item_id))),
+    );
+  checklistLabel.append(checklistSelect);
+  const fileLabel = makeElement("label", "form-field");
+  fileLabel.append(makeElement("span", "", "Tệp PDF, PNG hoặc JPEG (tối đa 10 MB)"));
+  const file = document.createElement("input");
+  file.type = "file";
+  file.accept = ".pdf,.png,.jpg,.jpeg";
+  file.required = true;
+  fileLabel.append(file);
+  const submit = makeElement("button", "button button-primary", "Tải lên");
+  submit.type = "submit";
+  form.append(checklistLabel, fileLabel, submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData();
+    data.append("file", file.files[0]);
+    data.append("checklist_item_id", checklistSelect.value);
+    try {
+      await api(`/teachers/${teacher.id}/documents`, {
+        method: "POST",
+        body: data,
+      });
+      showToast("Đã nộp tài liệu. Tài liệu đang chờ nhân sự rà soát.");
+      await renderWorkspace();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+  $("#workspace-form-region").append(form);
+
+  const documentsByItem = new Map();
+  documents.forEach((item) => {
+    if (item.checklist_item_id && !documentsByItem.has(item.checklist_item_id))
+      documentsByItem.set(item.checklist_item_id, item);
+  });
+  $("#workspace-form-region").append(
+    makeElement("h2", "detail-section-title", "Checklist hồ sơ"),
+    buildTable(
+      ["Tài liệu", "Yêu cầu", "Minh chứng gần nhất"],
+      requirements.map((item) => {
+        const document = documentsByItem.get(item.item_id);
+        const evidence = document
+          ? makeElement(
+              "span",
+              "",
+              `${statusLabels[document.review_status]}${
+                document.review_reason ? ` — ${document.review_reason}` : ""
+              }`,
+            )
+          : "Chưa nộp";
+        return [
+          item.label,
+          checklistRequirementStatuses[item.status] || item.status,
+          evidence,
+        ];
+      }),
+      "Chưa có mục checklist.",
+    ),
+  );
+  setTable(
+    ["Tài liệu đã nộp", "Dung lượng", "Ngày nộp", "Trạng thái", "Tải xuống"],
+    documents.map((item) => [
+      item.original_name,
+      `${Math.ceil(item.size_bytes / 1024)} KB`,
+      new Date(item.created_at).toLocaleString("vi-VN"),
+      badge(item.review_status),
+      actionButton("Tải tệp", "download-document", item.id),
+    ]),
+    "Bạn chưa nộp tài liệu minh chứng.",
+  );
 }
 
 async function renderDepartments() {
@@ -1211,9 +1333,29 @@ async function renderAccounts() {
       ["hr", "Nhân viên nhân sự"],
       ["manager", "Người quản lý"],
       ["admin", "Quản trị viên"],
+      ["lecturer", "Giảng viên"],
     ],
   });
-  createForm.append(username, fullName, password, role);
+  const linkableTeachers = await api("/users/linkable-teachers");
+  const teacherLink = inputField({
+    name: "teacher_id",
+    label: "Hồ sơ giảng viên",
+    type: "select",
+    required: false,
+    options: linkableTeachers.map((teacher) => [
+      String(teacher.id),
+      `${teacher.employee_code} — ${teacher.full_name}`,
+    ]),
+  });
+  teacherLink.classList.add("hidden");
+  const syncCreateTeacherLink = () => {
+    const isLecturer = role.querySelector("select").value === "lecturer";
+    teacherLink.classList.toggle("hidden", !isLecturer);
+    teacherLink.querySelector("select").required = isLecturer;
+  };
+  role.querySelector("select").addEventListener("change", syncCreateTeacherLink);
+  syncCreateTeacherLink();
+  createForm.append(username, fullName, password, role, teacherLink);
   addPasswordToggle(password.querySelector("input"));
   const createButton = makeElement(
     "button",
@@ -1226,6 +1368,11 @@ async function renderAccounts() {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries(new FormData(form));
+    if (values.role === "lecturer") {
+      values.teacher_id = Number(values.teacher_id);
+    } else {
+      delete values.teacher_id;
+    }
     try {
       await api("/users", { method: "POST", body: JSON.stringify(values) });
       showToast("Đã tạo tài khoản.");
@@ -1252,6 +1399,7 @@ async function renderAccounts() {
     ["admin", "Quản trị viên"],
     ["hr", "Nhân viên nhân sự"],
     ["manager", "Người quản lý"],
+    ["lecturer", "Giảng viên"],
   ]) {
     roleFilter.add(new Option(label, value));
   }
@@ -1302,7 +1450,7 @@ async function renderAccounts() {
   drawRows();
 }
 
-function openAccountModal(user) {
+async function openAccountModal(user) {
   const form = $("#account-form");
   form.reset();
   clearError($("#account-form-error"));
@@ -1310,6 +1458,26 @@ function openAccountModal(user) {
   form.elements.username.value = user.username;
   form.elements.full_name.value = user.full_name;
   form.elements.role.value = user.role;
+  const teacherSelect = form.elements.teacher_id;
+  const linkField = $("#account-teacher-link-field");
+  const teachers = await api(`/users/linkable-teachers?user_id=${user.id}`);
+  teacherSelect.replaceChildren(new Option("Chọn hồ sơ", ""));
+  teachers.forEach((teacher) =>
+    teacherSelect.add(
+      new Option(
+        `${teacher.employee_code} — ${teacher.full_name}`,
+        String(teacher.id),
+      ),
+    ),
+  );
+  teacherSelect.value = user.teacher_id ? String(user.teacher_id) : "";
+  const syncEditTeacherLink = () => {
+    const isLecturer = form.elements.role.value === "lecturer";
+    linkField.classList.toggle("hidden", !isLecturer);
+    teacherSelect.required = isLecturer;
+  };
+  form.elements.role.onchange = syncEditTeacherLink;
+  syncEditTeacherLink();
   $("#account-modal-title").textContent =
     `Chỉnh sửa tài khoản ${user.username}`;
   $("#account-backdrop").classList.remove("hidden");
@@ -1692,6 +1860,10 @@ function bindEvents() {
     const payload = {
       full_name: form.elements.full_name.value,
       role: form.elements.role.value,
+      teacher_id:
+        form.elements.role.value === "lecturer"
+          ? Number(form.elements.teacher_id.value)
+          : null,
     };
     try {
       await updateAccount(userId, payload);
@@ -1786,6 +1958,31 @@ function bindEvents() {
           link.download = "evidence";
           link.click();
           URL.revokeObjectURL(link.href);
+          break;
+        }
+        case "approve-document":
+        case "reject-document": {
+          if (state.user.role !== "hr")
+            throw new Error("Bạn không có quyền rà soát tài liệu.");
+          const review_status =
+            button.dataset.action === "approve-document"
+              ? "approved"
+              : "rejected";
+          const reason =
+            review_status === "rejected"
+              ? window.prompt("Nhập lý do từ chối (bắt buộc):")
+              : null;
+          if (review_status === "rejected" && !reason?.trim()) break;
+          await api(`/documents/${id}/review`, {
+            method: "PATCH",
+            body: JSON.stringify({ review_status, reason }),
+          });
+          showToast(
+            review_status === "approved"
+              ? "Đã xác nhận tài liệu."
+              : "Đã từ chối tài liệu.",
+          );
+          await renderWorkspace();
           break;
         }
         case "decide-change":
@@ -1893,7 +2090,7 @@ function bindEvents() {
         case "edit-account": {
           const user = state.users.find((entry) => entry.id === id);
           if (!user) throw new Error("Không tìm thấy tài khoản cần cập nhật.");
-          openAccountModal(user);
+          await openAccountModal(user);
           break;
         }
         default:
@@ -2260,13 +2457,34 @@ async function drawDetailTab(teacher) {
     const items = await api(`/teachers/${id}/documents`);
     body.append(
       buildTable(
-        ["Tài liệu", "Dung lượng", "Ngày tải", ...(isHr ? ["Tải xuống"] : [])],
+        [
+          "Tài liệu",
+          "Dung lượng",
+          "Ngày tải",
+          "Rà soát",
+          ...(isHr ? ["Thao tác"] : []),
+        ],
         items.map((item) => [
           item.original_name,
           `${Math.ceil(item.size_bytes / 1024)} KB`,
           new Date(item.created_at).toLocaleString("vi-VN"),
+          makeElement(
+            "span",
+            "",
+            `${statusLabels[item.review_status]}${item.review_reason ? ` — ${item.review_reason}` : ""}`,
+          ),
           ...(isHr
-            ? [actionButton("Tải tệp", "download-document", item.id)]
+            ? [
+                actionGroup([
+                  actionButton("Tải tệp", "download-document", item.id),
+                  ...(item.review_status === "pending"
+                    ? [
+                        actionButton("Duyệt", "approve-document", item.id),
+                        actionButton("Từ chối", "reject-document", item.id),
+                      ]
+                    : []),
+                ]),
+              ]
             : []),
         ]),
         "Chưa có tài liệu minh chứng.",

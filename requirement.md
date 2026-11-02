@@ -37,11 +37,12 @@ Bản demo hệ thống quản lý hồ sơ giảng viên, thống kê nhân s�
 
 **7\. Đối tượng người sử dụng và quyền thao tác**
 
-| **Đối tượng người dùng** | **Thao tác chính**                               |
-| ------------------------ | ------------------------------------------------ |
-| **Quản trị viên**        | Quản lý tài khoản và phân quyền người dùng.      |
-| **Cán bộ nhân sự**       | Thêm, sửa, xóa, xem và tra cứu hồ sơ giảng viên. |
-| **Cán bộ quản lý**       | Xem và theo dõi báo cáo thống kê nhân sự.        |
+| **Đối tượng người dùng** | **Thao tác chính** |
+| ------------------------ | ------------------ |
+| **Quản trị viên** | Quản lý tài khoản và phân quyền người dùng. |
+| **Cán bộ nhân sự** | Thêm, sửa, xóa, xem và tra cứu hồ sơ giảng viên. |
+| **Cán bộ quản lý** | Xem và theo dõi báo cáo thống kê nhân sự. |
+| **Giảng viên** | Xem hồ sơ cá nhân đã liên kết và tải tài liệu minh chứng lên để nhân sự rà soát; không tự sửa dữ liệu chính thức. |
 
 **8\. Lợi ích dự kiến**
 
@@ -53,7 +54,7 @@ Bổ sung chức năng lọc hồ sơ giảng viên theo khoa và trình độ c
 
 **10\. Các nhóm chức năng chính**
 
-**Nhóm 1 – Quản lý hồ sơ giảng viên:** Thêm, sửa, xóa, xem và tìm kiếm hồ sơ giảng viên.
+**Nhóm 1 – Quản lý hồ sơ giảng viên:** Cán bộ nhân sự thêm, sửa, xóa, xem và tìm kiếm hồ sơ; giảng viên xem hồ sơ đã liên kết và tải tài liệu minh chứng lên hệ thống.
 
 **Nhóm 2 – Thống kê và báo cáo nhân sự:** Thống kê số lượng giảng viên theo khoa và trình độ chuyên môn.
 

@@ -158,9 +158,23 @@
           </div>
         </div>
         <nav class="main-nav" aria-label="Điều hướng chính">
-          <div class="nav-label">TRANG CHỦ</div>
-          <button class="nav-link" data-view="overview" type="button">
+          <div class="nav-label" data-roles="admin,hr,manager">TRANG CHỦ</div>
+          <button
+            class="nav-link"
+            data-view="overview"
+            data-roles="admin,hr,manager"
+            type="button"
+          >
             <svg class="ico"><use href="#i-dash" /></svg><span>Tổng quan</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="lecturer"
+            data-roles="lecturer"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-users" /></svg>
+            <span>Hồ sơ của tôi</span>
           </button>
           <div class="nav-label" data-roles="hr">HỒ SƠ NHÂN SỰ</div>
           <button
@@ -241,7 +255,7 @@
           </div>
           <div class="topbar-actions">
             <span class="topbar-date" id="today-date"></span>
-            <div class="menu-wrap">
+            <div class="menu-wrap" data-roles="admin,hr,manager">
               <button
                 class="top-icon"
                 id="notif-button"
@@ -636,6 +650,13 @@
               <option value="hr">Nhân viên nhân sự</option>
               <option value="manager">Người quản lý</option>
               <option value="admin">Quản trị viên</option>
+              <option value="lecturer">Giảng viên</option>
+            </select></label
+          >
+          <label class="form-field hidden" id="account-teacher-link-field"
+            ><span>Hồ sơ giảng viên <b>*</b></span
+            ><select name="teacher_id">
+              <option value="">Chọn hồ sơ</option>
             </select></label
           >
           <div

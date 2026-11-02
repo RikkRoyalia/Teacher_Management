@@ -66,6 +66,7 @@ from app.schemas import (
     DepartmentRead,
     DepartmentUpdate,
     EvidenceDocumentRead,
+    EvidenceDocumentReview,
     LoginInput,
     PasswordChange,
     PasswordReset,
@@ -114,6 +115,7 @@ IMPORTANT_TEACHER_FIELDS = {
 }
 APPROVABLE_FIELDS = IMPORTANT_TEACHER_FIELDS
 HR_USER = Annotated[User, Depends(require_roles("hr"))]
+HR_OR_LECTURER = Annotated[User, Depends(require_roles("hr", "lecturer"))]
 MANAGER_USER = Annotated[User, Depends(require_roles("manager"))]
 ADMIN_USER = Annotated[User, Depends(require_roles("admin"))]
 HR_OR_MANAGER = Annotated[User, Depends(require_roles("hr", "manager"))]
@@ -316,7 +318,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     def logout(
         request: Request,
         db: DbSession,
-        user: Annotated[User, Depends(require_roles("admin", "hr", "manager"))],
+        user: Annotated[User, Depends(require_roles("admin", "hr", "manager", "lecturer"))],
     ) -> dict[str, str]:
         login_session: LoginSession = request.state.login_session
         db.delete(login_session)
@@ -334,7 +336,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         payload: PasswordChange,
         request: Request,
         db: DbSession,
-        user: Annotated[User, Depends(require_roles("admin", "hr", "manager"))],
+        user: Annotated[User, Depends(require_roles("admin", "hr", "manager", "lecturer"))],
     ) -> dict[str, str]:
         _require_csrf(request)
         if not verify_password(payload.current_password, user.password_hash):
@@ -357,9 +359,39 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         response.delete_cookie(CSRF_COOKIE, path="/", samesite="strict")
         return response
 
+    @application.get("/lecturer/profile", response_model=TeacherRead, tags=["lecturers"])
+    def lecturer_profile(db: DbSession, actor: Annotated[User, Depends(require_roles("lecturer"))]) -> Teacher:
+        if actor.teacher_id is None:
+            raise HTTPException(status_code=404, detail="No teacher profile is linked to this account.")
+        return _require_teacher(db, actor.teacher_id)
+
     @application.get("/users", response_model=list[UserRead], tags=["accounts"])
     def list_users(db: DbSession, _: ADMIN_USER) -> list[User]:
         return list(db.scalars(select(User).order_by(User.username)))
+
+    @application.get("/users/linkable-teachers", tags=["accounts"])
+    def list_linkable_teachers(
+        db: DbSession,
+        _: ADMIN_USER,
+        user_id: int | None = Query(default=None, gt=0),
+    ) -> list[dict[str, Any]]:
+        user = db.get(User, user_id) if user_id is not None else None
+        if user_id is not None and user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        statement = (
+            select(Teacher)
+            .outerjoin(User, User.teacher_id == Teacher.id)
+            .where(or_(User.id.is_(None), User.id == user_id))
+            .order_by(Teacher.employee_code)
+        )
+        return [
+            {
+                "id": teacher.id,
+                "employee_code": teacher.employee_code,
+                "full_name": teacher.full_name,
+            }
+            for teacher in db.scalars(statement)
+        ]
 
     @application.post(
         "/users",
@@ -368,17 +400,25 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         tags=["accounts"],
     )
     def create_user(payload: UserCreate, db: DbSession, actor: ADMIN_USER) -> User:
+        if payload.teacher_id is not None:
+            _require_linkable_teacher(db, payload.teacher_id)
         user = User(
             username=payload.username.lower(),
             full_name=payload.full_name,
             password_hash=hash_password(payload.password),
             role=payload.role,
+            teacher_id=payload.teacher_id,
         )
         db.add(user)
         try:
             db.flush()
             record_audit(
-                db, actor, "user_created", "user", user.id, details={"role": user.role}
+                db,
+                actor,
+                "user_created",
+                "user",
+                user.id,
+                details={"role": user.role, "teacher_id": user.teacher_id},
             )
             db.commit()
         except IntegrityError as error:
@@ -398,6 +438,20 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         if target is None:
             raise HTTPException(status_code=404, detail="User not found.")
         changes = payload.model_dump(exclude_unset=True)
+        role = changes.get("role", target.role)
+        teacher_id = changes.get("teacher_id", target.teacher_id)
+        if role == "lecturer":
+            if teacher_id is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A lecturer account must be linked to a teacher profile.",
+                )
+            _require_linkable_teacher(db, teacher_id, exclude_user_id=target.id)
+        elif teacher_id is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Only lecturer accounts can be linked to a teacher profile.",
+            )
         if target.id == actor.id and (
             changes.get("is_active") is False
             or ("role" in changes and changes["role"] != actor.role)
@@ -416,6 +470,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         if (
             ("is_active" in changes and changes["is_active"] != target.is_active)
             or ("role" in changes and changes["role"] != target.role)
+            or ("teacher_id" in changes and changes["teacher_id"] != target.teacher_id)
         ):
             for login_session in db.scalars(
                 select(LoginSession).where(LoginSession.user_id == target.id)
@@ -424,7 +479,13 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         for field, value in changes.items():
             setattr(target, field, value)
         record_audit(db, actor, "user_updated", "user", target.id, details=changes)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="Teacher profile is already linked to another account."
+            ) from error
         db.refresh(target)
         return target
 
@@ -911,8 +972,8 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         response_model=list[EvidenceDocumentRead],
         tags=["documents"],
     )
-    def list_documents(teacher_id: int, db: DbSession, _: HR_USER) -> list[EvidenceDocument]:
-        _require_teacher(db, teacher_id)
+    def list_documents(teacher_id: int, db: DbSession, actor: HR_OR_LECTURER) -> list[EvidenceDocument]:
+        _require_teacher_access(db, actor, teacher_id)
         return list(
             db.scalars(
                 select(EvidenceDocument)
@@ -930,13 +991,22 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     async def upload_document(
         teacher_id: int,
         db: DbSession,
-        actor: HR_USER,
+        actor: HR_OR_LECTURER,
         file: UploadFile = File(...),
         checklist_item_id: int | None = Form(default=None),
         qualification_id: int | None = Form(default=None),
         contract_id: int | None = Form(default=None),
     ) -> EvidenceDocument:
-        _require_teacher(db, teacher_id)
+        _require_teacher_access(db, actor, teacher_id)
+        if actor.role == "lecturer" and (
+            checklist_item_id is None
+            or qualification_id is not None
+            or contract_id is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Lecturers must attach uploads to a checklist item only.",
+            )
         if checklist_item_id is not None:
             item = db.get(ChecklistItem, checklist_item_id)
             if item is None or not item.is_active:
@@ -980,6 +1050,9 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             content_type=expected_type,
             size_bytes=len(content),
             uploaded_by=actor.id,
+            review_status="pending" if actor.role == "lecturer" else "approved",
+            reviewed_by=actor.id if actor.role == "hr" else None,
+            reviewed_at=datetime.now(timezone.utc) if actor.role == "hr" else None,
         )
         db.add(document)
         try:
@@ -1000,11 +1073,12 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     def download_document(
         document_id: int,
         db: DbSession,
-        _: HR_USER,
+        actor: HR_OR_LECTURER,
     ) -> FileResponse:
         document = db.get(EvidenceDocument, document_id)
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found.")
+        _require_teacher_access(db, actor, document.teacher_id)
         path = application.state.upload_dir / document.stored_name
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Stored document is missing.")
@@ -1018,6 +1092,55 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    @application.patch(
+        "/documents/{document_id}/review",
+        response_model=EvidenceDocumentRead,
+        tags=["documents"],
+    )
+    def review_document(
+        document_id: int,
+        payload: EvidenceDocumentReview,
+        db: DbSession,
+        actor: HR_USER,
+    ) -> EvidenceDocument:
+        document = db.get(EvidenceDocument, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        if document.review_status != "pending":
+            raise HTTPException(
+                status_code=409, detail="Only pending documents can be reviewed."
+            )
+        reviewed_at = datetime.now(timezone.utc)
+        claimed = db.execute(
+            update(EvidenceDocument)
+            .where(
+                EvidenceDocument.id == document_id,
+                EvidenceDocument.review_status == "pending",
+            )
+            .values(
+                review_status=payload.review_status,
+                review_reason=payload.reason,
+                reviewed_by=actor.id,
+                reviewed_at=reviewed_at,
+            )
+        )
+        if claimed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="This document has already been reviewed."
+            )
+        record_audit(
+            db,
+            actor,
+            "document_reviewed",
+            "document",
+            document.id,
+            details={"review_status": payload.review_status},
+        )
+        db.commit()
+        db.refresh(document)
+        return document
 
     @application.get(
         "/checklist-items",
@@ -1111,9 +1234,9 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     def list_teacher_checklist_requirements(
         teacher_id: int,
         db: DbSession,
-        _: HR_USER,
+        actor: HR_OR_LECTURER,
     ) -> list[dict[str, Any]]:
-        _require_teacher(db, teacher_id)
+        _require_teacher_access(db, actor, teacher_id)
         rows = db.execute(
             select(ChecklistItem, TeacherChecklistRequirement)
             .outerjoin(
@@ -1198,9 +1321,9 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     def teacher_completeness(
         teacher_id: int,
         db: DbSession,
-        _: HR_USER,
+        actor: HR_OR_LECTURER,
     ) -> dict[str, Any]:
-        teacher = _require_teacher(db, teacher_id)
+        teacher = _require_teacher_access(db, actor, teacher_id)
         missing, needs_review = _teacher_completeness(db, teacher)
         return {
             "teacher_id": teacher_id,
@@ -1873,6 +1996,28 @@ def _require_teacher(db: Session, teacher_id: int) -> Teacher:
     if teacher is None:
         raise HTTPException(status_code=404, detail="Teacher not found.")
     return teacher
+
+
+def _require_linkable_teacher(
+    db: Session,
+    teacher_id: int,
+    exclude_user_id: int | None = None,
+) -> Teacher:
+    teacher = _require_teacher(db, teacher_id)
+    linked_user_id = db.scalar(
+        select(User.id).where(User.teacher_id == teacher_id)
+    )
+    if linked_user_id is not None and linked_user_id != exclude_user_id:
+        raise HTTPException(
+            status_code=409, detail="Teacher profile is already linked to an account."
+        )
+    return teacher
+
+
+def _require_teacher_access(db: Session, actor: User, teacher_id: int) -> Teacher:
+    if actor.role == "lecturer" and actor.teacher_id != teacher_id:
+        raise HTTPException(status_code=404, detail="Teacher not found.")
+    return _require_teacher(db, teacher_id)
 
 
 def _safe_original_filename(filename: str) -> str:

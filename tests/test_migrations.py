@@ -50,6 +50,37 @@ class LegacyDatabaseMigrationTests(unittest.TestCase):
                         is_active BOOLEAN NOT NULL DEFAULT 1,
                         is_sensitive BOOLEAN NOT NULL DEFAULT 0
                     );
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        username VARCHAR(80) NOT NULL UNIQUE,
+                        full_name VARCHAR(160) NOT NULL,
+                        password_hash VARCHAR(255) NOT NULL,
+                        role VARCHAR(20) NOT NULL CONSTRAINT ck_user_role CHECK (
+                            role IN ('admin', 'hr', 'manager')
+                        ),
+                        is_active BOOLEAN NOT NULL DEFAULT 1,
+                        failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                        locked_until DATETIME,
+                        created_at DATETIME NOT NULL
+                    );
+                    CREATE TABLE login_sessions (
+                        id INTEGER PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        token_hash VARCHAR(64) NOT NULL UNIQUE,
+                        csrf_token_hash VARCHAR(64) NOT NULL,
+                        expires_at DATETIME NOT NULL,
+                        created_at DATETIME NOT NULL
+                    );
+                    CREATE TABLE audit_logs (
+                        id INTEGER PRIMARY KEY,
+                        actor_id INTEGER REFERENCES users(id) ON DELETE RESTRICT,
+                        action VARCHAR(80) NOT NULL,
+                        entity_type VARCHAR(80) NOT NULL,
+                        entity_id VARCHAR(80),
+                        outcome VARCHAR(30) NOT NULL,
+                        details TEXT,
+                        created_at DATETIME NOT NULL
+                    );
                     INSERT INTO departments (id, code, name) VALUES (1, 'IT', 'Information Technology');
                     INSERT INTO teachers (
                         id, employee_code, full_name, department_id, employment_status
@@ -58,6 +89,15 @@ class LegacyDatabaseMigrationTests(unittest.TestCase):
                     VALUES ('legacy-required', 'Existing required item', 'Legacy', 1);
                     INSERT INTO checklist_items (code, label, category, is_required)
                     VALUES ('legacy-optional', 'Existing optional item', 'Legacy', 0);
+                    INSERT INTO users (
+                        id, username, full_name, password_hash, role, created_at
+                    ) VALUES (1, 'legacy-admin', 'Legacy Admin', 'hash', 'admin', CURRENT_TIMESTAMP);
+                    INSERT INTO login_sessions (
+                        id, user_id, token_hash, csrf_token_hash, expires_at, created_at
+                    ) VALUES (1, 1, 'token', 'csrf', '2099-01-01', CURRENT_TIMESTAMP);
+                    INSERT INTO audit_logs (
+                        id, actor_id, action, entity_type, outcome, created_at
+                    ) VALUES (1, 1, 'before_migration', 'user', 'success', CURRENT_TIMESTAMP);
                     """
                 )
 
@@ -100,6 +140,24 @@ class LegacyDatabaseMigrationTests(unittest.TestCase):
                         connection.exec_driver_sql(
                             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
                         ).first()
+                    )
+                    self.assertEqual(
+                        connection.exec_driver_sql(
+                            "SELECT username FROM users WHERE id=1"
+                        ).scalar_one(),
+                        "legacy-admin",
+                    )
+                    self.assertEqual(
+                        connection.exec_driver_sql(
+                            "SELECT COUNT(*) FROM login_sessions"
+                        ).scalar_one(),
+                        1,
+                    )
+                    self.assertEqual(
+                        connection.exec_driver_sql(
+                            "SELECT COUNT(*) FROM audit_logs WHERE actor_id=1"
+                        ).scalar_one(),
+                        1,
                     )
                 self.assertEqual(len(list(backup_path.glob("pre-migration-*.sqlite3"))), 1)
                 migrate_database(database_url, engine)
