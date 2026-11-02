@@ -372,6 +372,45 @@
               </div>
               <div class="empty-state hidden" id="contract-empty"></div>
             </section>
+            <section class="panel hidden" id="certificate-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Cảnh báo chứng chỉ</h2>
+                  <p>Chứng chỉ sắp hoặc đã hết hạn theo ngưỡng HR cấu hình.</p>
+                </div>
+              </div>
+              <div id="certificate-alert-table"></div>
+              <form class="inline-form" id="certificate-warning-form">
+                <strong>Ngưỡng cảnh báo</strong>
+                <label class="form-field">
+                  <span>Cảnh báo trước bao nhiêu ngày (0–365)</span>
+                  <input
+                    id="certificate-warning-days"
+                    name="days"
+                    type="number"
+                    min="0"
+                    max="365"
+                    required
+                  />
+                </label>
+                <button class="button button-primary" type="submit">
+                  Lưu cấu hình
+                </button>
+              </form>
+            </section>
+            <section class="panel hidden" id="profile-review-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Rà soát hồ sơ</h2>
+                  <p>
+                    Quy tắc checklist là căn cứ chính; cờ ML chỉ là gợi ý thống
+                    kê để HR kiểm tra, không kết luận hồ sơ sai.
+                  </p>
+                </div>
+              </div>
+              <p class="page-subtitle" id="profile-review-model-status"></p>
+              <div id="profile-review-table"></div>
+            </section>
             <div id="overview-extra"></div>
           </section>
 

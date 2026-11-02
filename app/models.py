@@ -119,6 +119,10 @@ class Qualification(Base):
             "qualification_type IN ('degree', 'certificate', 'research', 'other')",
             name="ck_qualification_type",
         ),
+        CheckConstraint(
+            "expires_on IS NULL OR issued_on IS NULL OR expires_on >= issued_on",
+            name="ck_qualification_expiry_date",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -129,6 +133,7 @@ class Qualification(Base):
     institution: Mapped[str | None] = mapped_column(String(200))
     issued_on: Mapped[date | None] = mapped_column(Date)
     issued_year: Mapped[int | None] = mapped_column(Integer)
+    expires_on: Mapped[date | None] = mapped_column(Date, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )

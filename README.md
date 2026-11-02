@@ -42,6 +42,9 @@ Quyền được kiểm tra ở API. Tác vụ thay đổi yêu cầu session co
 - Tệp minh chứng lưu trong `private_uploads/`, không được mount như tài nguyên tĩnh. API chỉ cho HR tải lên/tải xuống PDF, PNG và JPEG tối đa 10 MB.
 - Checklist có danh mục mẫu từ `ho_so_giang_vien.md`, gồm phân loại và điều kiện áp dụng. Khi tạo hồ sơ giảng viên, HR phải rà soát từng mục có điều kiện/bắt buộc để chọn bắt buộc, tùy chọn hoặc không áp dụng; chỉ tài liệu đã xác định là bắt buộc mới ảnh hưởng trạng thái đầy đủ. Mục tùy chọn không bắt buộc mặc định; giấy tờ định danh, bảo hiểm/thuế và ảnh được đánh dấu nhạy cảm. Danh mục và điều kiện có thể cấu hình, không áp dụng cho nhân viên không giảng dạy.
 - Hợp đồng sắp hết hạn mặc định được cảnh báo trước 30 ngày; cấu hình bằng `PUT /settings/contract-warning-days`. Cảnh báo không tự gia hạn hoặc đổi trạng thái.
+- Bằng cấp/chứng chỉ có thể lưu ngày hết hạn; cảnh báo chứng chỉ mặc định trước 30 ngày, HR có thể cấu hình trong trang tổng quan hoặc qua `PUT /settings/certificate-warning-days`.
+- Rà soát hồ sơ dùng checklist và kiểm tra dữ liệu làm căn cứ; Isolation Forest của scikit-learn chỉ gắn cờ tổ hợp chỉ số tổng hợp khác biệt để HR xem lại. Mô hình không đọc tệp, không dùng dữ liệu định danh, không tự kết luận/sửa hồ sơ và sẽ báo chưa đủ dữ liệu nếu có dưới 20 hồ sơ hoặc không có biến thiên. Tác vụ xử lý cục bộ, không gọi LLM hay dịch vụ AI bên ngoài.
+- Danh sách phát hiện hồ sơ và cảnh báo chi tiết chỉ dành cho HR qua API; vai trò quản lý tiếp tục chỉ xem báo cáo tổng hợp theo quyền hiện có.
 - Nhật ký API không có thao tác sửa/xóa; audit ghi người dùng, thời điểm, loại thao tác, đối tượng và kết quả.
 
 ## Sao lưu và khôi phục

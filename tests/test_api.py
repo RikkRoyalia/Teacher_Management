@@ -446,6 +446,114 @@ class TeacherManagementApiTests(unittest.TestCase):
         )
         self.assertEqual(invalid_contract.status_code, 422)
 
+    def test_profile_review_expiry_rules_and_role_access(self) -> None:
+        teacher_id = self.create_teacher().json()["id"]
+        expiry = date.today() + timedelta(days=10)
+        qualification = self.client.post(
+            f"/teachers/{teacher_id}/qualifications",
+            json={
+                "qualification_type": "certificate",
+                "title": "Chứng chỉ ngoại ngữ",
+                "issued_on": (date.today() - timedelta(days=365)).isoformat(),
+                "expires_on": expiry.isoformat(),
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(qualification.status_code, 201, qualification.text)
+        self.assertEqual(qualification.json()["expires_on"], expiry.isoformat())
+        self.assertEqual(
+            self.client.get("/settings/certificate-warning-days").json(),
+            {"days": 30},
+        )
+
+        review = self.client.get(f"/profile-reviews?teacher_id={teacher_id}")
+        self.assertEqual(review.status_code, 200, review.text)
+        self.assertEqual(review.json()["model"]["status"], "insufficient_data")
+        certificate_alerts = review.json()["items"][0]["expiring_certificates"]
+        self.assertEqual(len(certificate_alerts), 1)
+        self.assertEqual(certificate_alerts[0]["days_remaining"], 10)
+        self.assertEqual(certificate_alerts[0]["status"], "expiring")
+        notifications = self.client.get("/notifications")
+        self.assertIn(
+            "Chứng chỉ sắp hoặc đã hết hạn",
+            [item["title"] for item in notifications.json()],
+        )
+
+        invalid_creation = self.client.post(
+            f"/teachers/{teacher_id}/qualifications",
+            json={
+                "qualification_type": "certificate",
+                "title": "Ngày hết hạn không hợp lệ",
+                "issued_on": date.today().isoformat(),
+                "expires_on": (date.today() - timedelta(days=1)).isoformat(),
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(invalid_creation.status_code, 422)
+        invalid_update = self.client.patch(
+            f"/qualifications/{qualification.json()['id']}",
+            json={"expires_on": (date.today() - timedelta(days=500)).isoformat()},
+            headers=self.headers(),
+        )
+        self.assertEqual(invalid_update.status_code, 422)
+
+        configured = self.client.put(
+            "/settings/certificate-warning-days?days=5",
+            headers=self.headers(),
+        )
+        self.assertEqual(configured.status_code, 200, configured.text)
+        self.assertEqual(configured.json(), {"days": 5})
+        review_after_config = self.client.get(
+            f"/profile-reviews?teacher_id={teacher_id}"
+        )
+        self.assertEqual(
+            review_after_config.json()["items"][0]["expiring_certificates"],
+            [],
+        )
+        stored_qualification = self.client.get(
+            f"/teachers/{teacher_id}/qualifications"
+        ).json()[0]
+        self.assertEqual(stored_qualification["expires_on"], expiry.isoformat())
+
+        manager = self.login("manager")
+        manager_headers = {"X-CSRF-Token": manager["csrf_token"]}
+        self.assertEqual(
+            self.client.get("/profile-reviews", headers=manager_headers).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/settings/certificate-warning-days",
+                headers=manager_headers,
+            ).status_code,
+            403,
+        )
+
+    def test_profile_review_classical_model_requires_sufficient_data(self) -> None:
+        teacher_ids = [
+            self.create_teacher(f"T{index:03d}").json()["id"]
+            for index in range(20)
+        ]
+        for index in range(12):
+            response = self.client.post(
+                f"/teachers/{teacher_ids[-1]}/qualifications",
+                json={
+                    "qualification_type": "degree",
+                    "title": f"Văn bằng bổ sung {index}",
+                },
+                headers=self.headers(),
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+
+        review = self.client.get("/profile-reviews")
+        self.assertEqual(review.status_code, 200, review.text)
+        result = review.json()
+        self.assertEqual(result["model"]["status"], "ready")
+        self.assertEqual(result["model"]["profile_count"], 20)
+        anomaly_items = [item for item in result["items"] if item["anomaly"]]
+        self.assertTrue(anomaly_items)
+        self.assertTrue(anomaly_items[0]["anomaly"]["reasons"])
+
     def test_reports_export_and_audit_access(self) -> None:
         self.create_teacher()
         summary = self.client.get("/reports/summary")

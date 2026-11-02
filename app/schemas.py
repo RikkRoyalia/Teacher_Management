@@ -173,6 +173,13 @@ class QualificationCreate(InputModel):
     institution: str | None = Field(default=None, max_length=200)
     issued_on: date | None = None
     issued_year: int | None = Field(default=None, ge=1900, le=2200)
+    expires_on: date | None = None
+
+    @model_validator(mode="after")
+    def validate_expiry_date(self) -> "QualificationCreate":
+        if self.issued_on and self.expires_on and self.expires_on < self.issued_on:
+            raise ValueError("Qualification expiry date cannot be before its issue date.")
+        return self
 
 
 class QualificationUpdate(InputModel):
@@ -182,6 +189,7 @@ class QualificationUpdate(InputModel):
     institution: str | None = Field(default=None, max_length=200)
     issued_on: date | None = None
     issued_year: int | None = Field(default=None, ge=1900, le=2200)
+    expires_on: date | None = None
 
     @model_validator(mode="after")
     def require_changes(self) -> "QualificationUpdate":
@@ -190,6 +198,12 @@ class QualificationUpdate(InputModel):
         for field in ("qualification_type", "title"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null.")
+        if (
+            self.issued_on
+            and self.expires_on
+            and self.expires_on < self.issued_on
+        ):
+            raise ValueError("Qualification expiry date cannot be before its issue date.")
         return self
 
 
@@ -204,6 +218,7 @@ class QualificationRead(BaseModel):
     institution: str | None
     issued_on: date | None
     issued_year: int | None
+    expires_on: date | None
 
 
 class ContractCreate(InputModel):

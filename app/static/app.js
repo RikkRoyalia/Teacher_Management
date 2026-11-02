@@ -98,7 +98,6 @@ function addPasswordToggle(input) {
     );
     toggle.setAttribute("aria-pressed", String(showPassword));
   });
-
   field.replaceWith(container);
   control.append(input, toggle);
   container.append(label, control);
@@ -527,6 +526,8 @@ async function renderOverview() {
   const isAdmin = state.user.role === "admin";
   const isHr = state.user.role === "hr";
   $("#contract-panel").classList.toggle("hidden", isAdmin);
+  $("#certificate-panel").classList.toggle("hidden", !isHr);
+  $("#profile-review-panel").classList.toggle("hidden", !isHr);
   try {
     if (isAdmin) {
       const [users, logs] = await Promise.all([
@@ -571,7 +572,10 @@ async function renderOverview() {
       extra.append(panel);
       return;
     }
-    const summary = await api("/reports/summary");
+    const [summary, profileReview] = await Promise.all([
+      api("/reports/summary"),
+      isHr ? api("/profile-reviews") : Promise.resolve(null),
+    ]);
     const target = (hrView) => (isHr ? hrView : "reports");
     cards.append(
       statCard(
@@ -634,6 +638,68 @@ async function renderOverview() {
     empty.textContent = isHr
       ? "Hiện chưa có hợp đồng nào cần chú ý."
       : "Vai trò Người quản lý chỉ xem số liệu tổng hợp; chi tiết hợp đồng do bộ phận nhân sự quản lý.";
+    if (isHr) {
+      $("#certificate-warning-days").value = String(
+        (await api("/settings/certificate-warning-days")).days,
+      );
+      const certificateAlerts = profileReview.items.flatMap((item) =>
+        item.expiring_certificates.map((certificate) => [
+          item.employee_code,
+          item.teacher_name,
+          certificate.title,
+          certificate.expires_on,
+          certificate.days_remaining,
+          badge(certificate.status),
+        ]),
+      );
+      $("#certificate-alert-table").replaceChildren(
+        buildTable(
+          [
+            "Mã giảng viên",
+            "Giảng viên",
+            "Chứng chỉ",
+            "Ngày hết hạn",
+            "Ngày còn lại",
+            "Trạng thái",
+          ],
+          certificateAlerts,
+          "Hiện chưa có chứng chỉ nào cần chú ý.",
+        ),
+      );
+      const modelStatus = profileReview.model;
+      $("#profile-review-model-status").textContent =
+        `${modelStatus.message} (Đã đánh giá ${modelStatus.profile_count} hồ sơ.)`;
+      const reviewRows = profileReview.items.map((item) => [
+        item.employee_code,
+        item.teacher_name,
+        item.missing.length,
+        item.needs_review.length,
+        item.invalid_data.length,
+        item.expiring_certificates.length,
+        item.suggestions.length,
+        item.anomaly
+          ? badge("expiring", "ML: cần HR xem lại")
+          : "—",
+        actionButton("Mở hồ sơ", "teacher-detail", item.teacher_id),
+      ]);
+      $("#profile-review-table").replaceChildren(
+        buildTable(
+          [
+            "Mã giảng viên",
+            "Giảng viên",
+            "Thiếu bắt buộc",
+            "Chờ rà soát điều kiện",
+            "Dữ liệu cần kiểm tra",
+            "Chứng chỉ sắp/đã hết hạn",
+            "Gợi ý tùy chọn",
+            "Cờ bất thường",
+            "",
+          ],
+          reviewRows,
+          "Không có hồ sơ cần chú ý theo checklist và dữ liệu hiện có.",
+        ),
+      );
+    }
   } catch (error) {
     showToast(`Không thể tải tổng quan: ${error.message}`, true);
   }
@@ -910,6 +976,7 @@ async function renderQualifications() {
         { name: "specialty", label: "Chuyên ngành" },
         { name: "institution", label: "Cơ sở đào tạo" },
         { name: "issued_year", label: "Năm cấp", type: "number" },
+        { name: "expires_on", label: "Ngày hết hạn (nếu có)", type: "date" },
       ],
       "Thêm bằng cấp hoặc chứng chỉ",
       async (values) => {
@@ -2017,6 +2084,19 @@ function bindEvents() {
       showError($("#form-error"), error.message);
     }
   });
+  $("#certificate-warning-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const days = Number($("#certificate-warning-days").value);
+    try {
+      await api(`/settings/certificate-warning-days?days=${days}`, {
+        method: "PUT",
+      });
+      showToast("Đã cập nhật ngưỡng cảnh báo chứng chỉ.");
+      await renderOverview();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
   $("#department-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -2326,7 +2406,7 @@ async function drawDetailTab(teacher) {
     const items = await api(`/teachers/${id}/qualifications`);
     body.append(
       buildTable(
-        ["Loại", "Tên", "Chuyên ngành", "Cơ sở đào tạo", "Năm"],
+        ["Loại", "Tên", "Chuyên ngành", "Cơ sở đào tạo", "Năm", "Ngày hết hạn"],
         items.map((item) => [
           qualificationTypeLabels[item.qualification_type] ||
             item.qualification_type,
@@ -2334,6 +2414,7 @@ async function drawDetailTab(teacher) {
           item.specialty,
           item.institution,
           item.issued_year || item.issued_on,
+          item.expires_on,
         ]),
         "Chưa có bằng cấp hoặc chứng chỉ.",
       ),

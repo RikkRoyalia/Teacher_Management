@@ -45,6 +45,12 @@ from app.models import (
     User,
     WorkHistory,
 )
+from app.profile_review import (
+    default_checklist_status as _default_checklist_status,
+    missing_requirements as _missing_requirements,
+    review_profiles,
+    teacher_completeness as _teacher_completeness,
+)
 from app.schemas import (
     ChangeDecision,
     ChangeRequestCreate,
@@ -773,7 +779,19 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         qualification = db.get(Qualification, qualification_id)
         if qualification is None:
             raise HTTPException(status_code=404, detail="Qualification not found.")
-        for field, value in payload.model_dump(exclude_unset=True).items():
+        changes = payload.model_dump(exclude_unset=True)
+        effective_issued_on = changes.get("issued_on", qualification.issued_on)
+        effective_expires_on = changes.get("expires_on", qualification.expires_on)
+        if (
+            effective_issued_on
+            and effective_expires_on
+            and effective_expires_on < effective_issued_on
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Qualification expiry date cannot be before its issue date.",
+            )
+        for field, value in changes.items():
             setattr(qualification, field, value)
         record_audit(db, actor, "qualification_updated", "qualification", qualification.id)
         db.commit()
@@ -1191,6 +1209,16 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             "needs_review": needs_review,
         }
 
+    @application.get("/profile-reviews", tags=["profile-review"])
+    def get_profile_reviews(
+        db: DbSession,
+        _: HR_USER,
+        teacher_id: int | None = Query(default=None, gt=0),
+    ) -> dict[str, Any]:
+        if teacher_id is not None:
+            _require_teacher(db, teacher_id)
+        return review_profiles(db, _certificate_warning_days(db), teacher_id)
+
     @application.get("/contracts/alerts", tags=["contracts"])
     def contract_alerts(
         db: DbSession,
@@ -1245,6 +1273,32 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         db.commit()
         return {"days": days}
 
+    @application.get("/settings/certificate-warning-days", tags=["settings"])
+    def get_certificate_warning_days(db: DbSession, _: HR_USER) -> dict[str, int]:
+        return {"days": _certificate_warning_days(db)}
+
+    @application.put("/settings/certificate-warning-days", tags=["settings"])
+    def set_certificate_warning_days(
+        db: DbSession,
+        actor: HR_USER,
+        days: int = Query(30, ge=0, le=365),
+    ) -> dict[str, int]:
+        setting = db.get(AppSetting, "certificate_warning_days")
+        if setting is None:
+            setting = AppSetting(key="certificate_warning_days", value=str(days))
+            db.add(setting)
+        else:
+            setting.value = str(days)
+        record_audit(
+            db,
+            actor,
+            "certificate_warning_days_updated",
+            "setting",
+            "certificate_warning_days",
+        )
+        db.commit()
+        return {"days": days}
+
     @application.get("/notifications", tags=["notifications"])
     def list_notifications(
         db: DbSession,
@@ -1295,6 +1349,23 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
                     "title": "Hợp đồng sắp hoặc đã hết hạn",
                     "message": f"Có {alerts} hợp đồng cần theo dõi.",
                     "created_at": now, "view": "overview",
+                })
+            expiring_certificates = db.scalar(
+                select(func.count()).select_from(Qualification).where(
+                    Qualification.qualification_type == "certificate",
+                    Qualification.expires_on.is_not(None),
+                    Qualification.expires_on
+                    <= date.today() + timedelta(days=_certificate_warning_days(db)),
+                )
+            )
+            if expiring_certificates:
+                items.append({
+                    "id": f"certificates-{expiring_certificates}",
+                    "level": "warning",
+                    "title": "Chứng chỉ sắp hoặc đã hết hạn",
+                    "message": f"Có {expiring_certificates} chứng chỉ cần theo dõi.",
+                    "created_at": now,
+                    "view": "overview",
                 })
         elif user.role == "manager":
             pending = list(db.scalars(
@@ -1812,55 +1883,18 @@ def _safe_original_filename(filename: str) -> str:
     return normalized[:255]
 
 
-def _default_checklist_status(item: ChecklistItem) -> str:
-    return "optional" if item.classification == "optional" else "review"
-
-
-def _teacher_completeness(
-    db: Session,
-    teacher: Teacher,
-) -> tuple[list[str], list[str]]:
-    missing: list[str] = []
-    needs_review: list[str] = []
-    if not teacher.employee_code:
-        missing.append("Mã giảng viên")
-    if not teacher.full_name:
-        missing.append("Họ và tên")
-    if teacher.department_id is None:
-        missing.append("Đơn vị công tác")
-    requirements = db.execute(
-        select(ChecklistItem, TeacherChecklistRequirement.status)
-        .outerjoin(
-            TeacherChecklistRequirement,
-            (TeacherChecklistRequirement.checklist_item_id == ChecklistItem.id)
-            & (TeacherChecklistRequirement.teacher_id == teacher.id),
-        )
-        .where(ChecklistItem.is_active.is_(True))
-    )
-    uploaded_item_ids = set(
-        db.scalars(
-            select(EvidenceDocument.checklist_item_id).where(
-                EvidenceDocument.teacher_id == teacher.id,
-                EvidenceDocument.checklist_item_id.is_not(None),
-            )
-        )
-    )
-    for item, status in requirements:
-        requirement_status = status or _default_checklist_status(item)
-        if requirement_status == "review":
-            needs_review.append(item.label)
-        elif requirement_status == "required" and item.id not in uploaded_item_ids:
-            missing.append(item.label)
-    return missing, needs_review
-
-
-def _missing_requirements(db: Session, teacher: Teacher) -> list[str]:
-    missing, needs_review = _teacher_completeness(db, teacher)
-    return missing + [f"Cần rà soát điều kiện: {label}" for label in needs_review]
-
-
 def _contract_warning_days(db: Session) -> int:
     setting = db.get(AppSetting, "contract_warning_days")
+    if setting is None:
+        return 30
+    try:
+        return min(max(int(setting.value), 0), 365)
+    except ValueError:
+        return 30
+
+
+def _certificate_warning_days(db: Session) -> int:
+    setting = db.get(AppSetting, "certificate_warning_days")
     if setting is None:
         return 30
     try:
