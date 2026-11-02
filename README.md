@@ -47,6 +47,26 @@ Quyền được kiểm tra ở API. Tác vụ thay đổi yêu cầu session co
 - Danh sách phát hiện hồ sơ và cảnh báo chi tiết chỉ dành cho HR qua API; vai trò quản lý tiếp tục chỉ xem báo cáo tổng hợp theo quyền hiện có.
 - Nhật ký API không có thao tác sửa/xóa; audit ghi người dùng, thời điểm, loại thao tác, đối tượng và kết quả.
 
+## Dữ liệu mẫu
+
+Chỉ chạy với server demo trên máy cá nhân. Script đăng nhập bằng tài khoản admin hiện có, sau đó tạo dữ liệu qua API với CSRF; script không ghi trực tiếp vào SQLite. Mở PowerShell tại thư mục dự án, khởi chạy server bằng `.\scripts\start_local.ps1`, rồi chạy:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\seed_demo.py --base-url http://127.0.0.1:8000
+```
+
+Script hỏi thông tin đăng nhập admin nếu chưa có biến môi trường `SEED_ADMIN_USER` và `SEED_ADMIN_PASSWORD`. Có thể thêm `--yes` để bỏ qua xác nhận ghi dữ liệu. Nếu server không chạy, script thoát và hướng dẫn khởi động server. Chỉ dùng dữ liệu giả; không chạy trên hệ thống hoặc cơ sở dữ liệu có dữ liệu thật.
+
+Script tạo khoa/bộ môn, 32 hồ sơ giảng viên, bằng cấp/chứng chỉ, hợp đồng, quá trình công tác, checklist, tài liệu minh chứng, yêu cầu thay đổi, thông báo và nhật ký hoạt động. Mã hồ sơ và mã dữ liệu có tiền tố `DEMO-`; chạy lại sẽ nhận diện các bản ghi demo đã có thay vì tạo bản sao. Mật khẩu cho các tài khoản demo được tạo ngẫu nhiên và in ở cuối mỗi lần chạy. Để bảo đảm mật khẩu có thể xem lại, mỗi lần chạy script sẽ đặt lại mật khẩu các tài khoản demo; lưu lại kết quả trước khi thoát.
+
+Các tài khoản được tạo: `hr_demo1`, `hr_demo2` (nhân sự); `manager_demo1`, `manager_demo2` (quản lý); và `hr_demolocked` (nhân sự đã khóa). Mật khẩu không được lưu trong script hoặc repository. Đăng nhập bằng từng tài khoản đang hoạt động để xem đúng giao diện theo vai trò.
+
+Tệp [sample_data/mau_nhap_giang_vien.xlsx](sample_data/mau_nhap_giang_vien.xlsx) dùng đúng hàng tiêu đề tải từ API mẫu nhập, gồm 10 dòng hợp lệ và 3 dòng lỗi có chủ ý để thử chức năng **Nhập Excel**. Script tạo mới/cập nhật tệp này trong mỗi lần chạy. Để xem dữ liệu: mở **Tổng quan** và **Báo cáo thống kê** để xem biểu đồ/cảnh báo; dùng tài khoản HR mở **Hồ sơ giảng viên** và các tab chi tiết; vào **Khoa & bộ môn**, **Yêu cầu thay đổi**, **Quản trị hệ thống** và **Nhật ký hoạt động** để xem các nhóm còn lại. Quản lý xem báo cáo và xử lý yêu cầu; tài khoản admin chỉ quản trị tài khoản và xem nhật ký theo quyền hiện có.
+
+### Làm sạch dữ liệu demo
+
+Dừng server trước khi làm sạch. Nếu cơ sở dữ liệu chỉ chứa dữ liệu demo, xóa đúng tệp SQLite đang được cấu hình (mặc định `teacher_management.db` ở thư mục dự án), sau đó chạy lại `.\.venv\Scripts\python.exe -m app.bootstrap_admin` để tạo admin ban đầu và khởi động server. Xóa `private_uploads/` chỉ khi muốn xóa cả các tệp minh chứng demo và đã xác nhận thư mục đó không chứa tệp cần giữ. Nếu `DATABASE_URL` trỏ tới nơi khác, kiểm tra đường dẫn trước khi xóa; xóa SQLite sẽ xóa toàn bộ dữ liệu trong cơ sở dữ liệu đó.
+
 ## Sao lưu và khôi phục
 
 Khi đang ở thư mục dự án:
