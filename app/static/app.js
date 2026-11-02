@@ -6,6 +6,7 @@ const state = {
   departments: [],
   users: [],
   selectedTeacherId: "",
+  detailEdit: null,
   contractWarningDays: 30,
   table: { rows: [], size: 10, page: 1 },
   notifications: [],
@@ -17,15 +18,9 @@ const state = {
 const viewTitles = {
   overview: "Tổng quan",
   teachers: "Hồ sơ giảng viên",
-  teacherChecklist: "Rà soát checklist hồ sơ",
   teacherDetail: "Chi tiết hồ sơ giảng viên",
   departments: "Khoa & bộ môn",
-  qualifications: "Bằng cấp & chứng chỉ",
-  contracts: "Hợp đồng lao động",
-  history: "Quá trình công tác",
-  documents: "Tài liệu minh chứng",
   changes: "Yêu cầu thay đổi",
-  checklist: "Checklist hồ sơ",
   reports: "Báo cáo nhân sự",
   accounts: "Quản trị hệ thống",
   audit: "Nhật ký hoạt động",
@@ -232,9 +227,7 @@ function navigate(view) {
   $$(".view-section").forEach((section) => section.classList.add("hidden"));
   $("#breadcrumb-current").textContent = viewTitles[view];
   $("#sidebar").classList.remove("open");
-  const activeView = ["teacherDetail", "teacherChecklist"].includes(view)
-    ? "teachers"
-    : view;
+  const activeView = view === "teacherDetail" ? "teachers" : view;
   $$(".nav-link").forEach((link) =>
     link.classList.toggle("active", link.dataset.view === activeView),
   );
@@ -258,19 +251,9 @@ function navigate(view) {
 function workspaceDescription(view) {
   const descriptions = {
     teachers: "Tìm kiếm, lọc và quản lý hồ sơ giảng viên.",
-    teacherChecklist:
-      "HR rà soát điều kiện áp dụng theo từng giảng viên; chỉ mục được đánh dấu bắt buộc mới ảnh hưởng trạng thái đầy đủ.",
     departments:
       "Quản lý cây đơn vị; đơn vị đã tham chiếu được lưu trữ thay vì xóa.",
-    qualifications:
-      "Thông tin bằng cấp, chứng chỉ và chuyên môn của giảng viên.",
-    contracts:
-      "Theo dõi hợp đồng; cảnh báo không tự gia hạn hay đổi trạng thái.",
-    history: "Lịch sử công tác được giữ lại qua các lần thay đổi đã duyệt.",
-    documents: "Tệp được lưu riêng, chỉ người có quyền nhân sự mới tải xuống.",
     changes: "Thay đổi quan trọng chỉ cập nhật hồ sơ chính thức sau khi duyệt.",
-    checklist:
-      "Checklist có thể cấu hình; tài liệu nhạy cảm không bắt buộc mặc định.",
     reports:
       "Thống kê theo đơn vị, trình độ, chức danh và trạng thái; vai trò quản lý chỉ xem tổng hợp.",
     accounts:
@@ -594,7 +577,7 @@ async function renderOverview() {
         "Hợp đồng sắp/đã hết hạn",
         summary.expiring_or_expired_contracts,
         "clock",
-        target("contracts"),
+        target("teachers"),
       ),
       statCard(
         "Yêu cầu chờ duyệt",
@@ -782,42 +765,13 @@ async function renderWorkspace() {
   const renderers = {
     teachers: renderTeachers,
     teacherDetail: renderTeacherDetail,
-    teacherChecklist: renderTeacherChecklist,
     departments: renderDepartments,
-    qualifications: renderQualifications,
-    contracts: renderContracts,
-    history: renderHistory,
-    documents: renderDocuments,
     changes: renderChanges,
-    checklist: renderChecklist,
     reports: renderReports,
     accounts: renderAccounts,
     audit: renderAudit,
   };
   await renderers[state.currentView]?.();
-}
-
-function teacherSelector(onChange, required = true) {
-  const label = makeElement("label", "filter-control");
-  label.append(makeElement("span", "", "Giảng viên"));
-  const select = document.createElement("select");
-  select.required = required;
-  select.append(new Option("Chọn giảng viên", ""));
-  for (const teacher of state.teachers) {
-    select.add(
-      new Option(
-        `${teacher.employee_code} — ${teacher.full_name}`,
-        String(teacher.id),
-      ),
-    );
-  }
-  select.value = state.selectedTeacherId;
-  select.addEventListener("change", () => {
-    state.selectedTeacherId = select.value;
-    onChange?.();
-  });
-  label.append(select);
-  return select;
 }
 
 async function renderTeachers() {
@@ -888,7 +842,6 @@ async function renderTeachers() {
         actionGroup([
           actionButton("Xem hồ sơ", "teacher-open", teacher.id, "primary"),
           actionButton("Sửa", "edit-teacher", teacher.id),
-          actionButton("Checklist", "teacher-checklist", teacher.id),
           actionButton("Xóa", "delete-teacher", teacher.id, "danger"),
         ]),
       ]),
@@ -941,253 +894,6 @@ async function renderDepartments() {
     ];
   });
   setTable(["Mã", "Đơn vị", "Đơn vị cha", "Mô tả", "Trạng thái", ""], rows);
-}
-
-async function renderQualifications() {
-  $("#workspace-filters").append(teacherSelector(() => renderQualifications()));
-  const teacherId = state.selectedTeacherId;
-  if (!teacherId)
-    return setTable(["Loại", "Tên", "Chuyên ngành", "Cơ sở", "Năm"], []);
-  const qualifications = await api(`/teachers/${teacherId}/qualifications`);
-  const rows = qualifications.map((item) => [
-    item.qualification_type,
-    item.title,
-    item.specialty || "—",
-    item.institution || "—",
-    item.issued_year || item.issued_on || "—",
-  ]);
-  setTable(["Loại", "Tên", "Chuyên ngành", "Cơ sở", "Năm"], rows);
-  $("#workspace-form-region").append(
-    buildForm(
-      [
-        {
-          name: "qualification_type",
-          label: "Loại",
-          type: "select",
-          required: true,
-          options: [
-            ["degree", "Bằng cấp"],
-            ["certificate", "Chứng chỉ"],
-            ["research", "Nghiên cứu"],
-            ["other", "Khác"],
-          ],
-        },
-        { name: "title", label: "Tên văn bằng/chứng chỉ", required: true },
-        { name: "specialty", label: "Chuyên ngành" },
-        { name: "institution", label: "Cơ sở đào tạo" },
-        { name: "issued_year", label: "Năm cấp", type: "number" },
-        { name: "expires_on", label: "Ngày hết hạn (nếu có)", type: "date" },
-      ],
-      "Thêm bằng cấp hoặc chứng chỉ",
-      async (values) => {
-        if (values.issued_year) values.issued_year = Number(values.issued_year);
-        await api(`/teachers/${teacherId}/qualifications`, {
-          method: "POST",
-          body: JSON.stringify(values),
-        });
-      },
-    ),
-  );
-}
-
-async function renderContracts() {
-  $("#workspace-filters").append(teacherSelector(() => renderContracts()));
-  state.contractWarningDays = (
-    await api("/settings/contract-warning-days")
-  ).days;
-  $("#workspace-form-region").append(
-    buildForm(
-      [
-        {
-          name: "days",
-          label: `Cảnh báo trước bao nhiêu ngày (hiện tại ${state.contractWarningDays})`,
-          type: "number",
-          required: true,
-        },
-      ],
-      "Cấu hình cảnh báo hợp đồng",
-      async (values) => {
-        const days = Number(values.days);
-        if (!Number.isInteger(days) || days < 0 || days > 365)
-          throw new Error("Số ngày phải từ 0 đến 365.");
-        await api(`/settings/contract-warning-days?days=${days}`, {
-          method: "PUT",
-        });
-      },
-    ),
-  );
-  const teacherId = state.selectedTeacherId;
-  if (!teacherId)
-    return setTable(
-      ["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"],
-      [],
-    );
-  const contracts = await api(`/teachers/${teacherId}/contracts`);
-  const rows = contracts.map((item) => [
-    item.contract_code,
-    item.contract_type,
-    item.starts_on,
-    item.ends_on || "Không thời hạn",
-    badge(item.display_status),
-  ]);
-  setTable(["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"], rows);
-  $("#workspace-form-region").append(
-    buildForm(
-      [
-        { name: "contract_code", label: "Mã hợp đồng", required: true },
-        { name: "contract_type", label: "Loại hợp đồng", required: true },
-        { name: "signed_on", label: "Ngày ký", type: "date" },
-        {
-          name: "starts_on",
-          label: "Ngày bắt đầu",
-          type: "date",
-          required: true,
-        },
-        { name: "ends_on", label: "Ngày kết thúc", type: "date" },
-      ],
-      "Thêm hợp đồng",
-      async (values) => {
-        await api(`/teachers/${teacherId}/contracts`, {
-          method: "POST",
-          body: JSON.stringify(values),
-        });
-      },
-    ),
-  );
-}
-
-async function renderHistory() {
-  $("#workspace-filters").append(teacherSelector(() => renderHistory()));
-  if (!state.selectedTeacherId)
-    return setTable(
-      ["Đơn vị", "Chức danh", "Bắt đầu", "Kết thúc", "Lý do"],
-      [],
-    );
-  const history = await api(
-    `/teachers/${state.selectedTeacherId}/work-history`,
-  );
-  $("#workspace-form-region").append(buildTimeline(history));
-  setTable(
-    ["Đơn vị", "Chức danh", "Bắt đầu", "Kết thúc", "Lý do"],
-    history.map((item) => [
-      state.departments.find((unit) => unit.id === item.department_id)?.name ||
-        "—",
-      item.position_title || "—",
-      item.starts_on,
-      item.ends_on || "Hiện tại",
-      item.reason || "—",
-    ]),
-  );
-  $("#workspace-form-region").append(
-    buildForm(
-      [
-        {
-          name: "department_id",
-          label: "Đơn vị",
-          type: "select",
-          required: true,
-          options: state.departments.map((unit) => [
-            String(unit.id),
-            unit.name,
-          ]),
-        },
-        { name: "position_title", label: "Chức danh" },
-        {
-          name: "starts_on",
-          label: "Ngày bắt đầu",
-          type: "date",
-          required: true,
-        },
-        { name: "ends_on", label: "Ngày kết thúc", type: "date" },
-        { name: "reason", label: "Lý do" },
-      ],
-      "Bổ sung giai đoạn công tác",
-      async (values) => {
-        values.department_id = Number(values.department_id);
-        await api(`/teachers/${state.selectedTeacherId}/work-history`, {
-          method: "POST",
-          body: JSON.stringify(values),
-        });
-      },
-    ),
-  );
-}
-
-async function renderDocuments() {
-  $("#workspace-filters").append(teacherSelector(() => renderDocuments()));
-  if (!state.selectedTeacherId)
-    return setTable(["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"], []);
-  const documents = await api(`/teachers/${state.selectedTeacherId}/documents`);
-  setTable(
-    ["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"],
-    documents.map((item) => [
-      item.original_name,
-      `${Math.ceil(item.size_bytes / 1024)} KB`,
-      new Date(item.created_at).toLocaleString("vi-VN"),
-      actionButton("Tải tệp", "download-document", item.id),
-    ]),
-  );
-  const [checklist, qualifications, contracts] = await Promise.all([
-    api("/checklist-items"),
-    api(`/teachers/${state.selectedTeacherId}/qualifications`),
-    api(`/teachers/${state.selectedTeacherId}/contracts`),
-  ]);
-  const form = document.createElement("form");
-  form.className = "inline-form";
-  form.append(makeElement("strong", "", "Tải minh chứng"));
-  const file = document.createElement("input");
-  file.type = "file";
-  file.name = "file";
-  file.accept = ".pdf,.png,.jpg,.jpeg";
-  file.required = true;
-  form.append(file);
-  const select = document.createElement("select");
-  select.name = "checklist_item_id";
-  select.append(new Option("Không gắn checklist", ""));
-  checklist
-    .filter((item) => item.is_active)
-    .forEach((item) => select.add(new Option(item.label, String(item.id))));
-  form.append(select);
-  const qualificationSelect = document.createElement("select");
-  qualificationSelect.append(new Option("Không gắn bằng cấp", ""));
-  qualifications.forEach((item) =>
-    qualificationSelect.add(new Option(item.title, String(item.id))),
-  );
-  const contractSelect = document.createElement("select");
-  contractSelect.append(new Option("Không gắn hợp đồng", ""));
-  contracts.forEach((item) =>
-    contractSelect.add(new Option(item.contract_code, String(item.id))),
-  );
-  qualificationSelect.addEventListener("change", () => {
-    contractSelect.disabled = Boolean(qualificationSelect.value);
-  });
-  contractSelect.addEventListener("change", () => {
-    qualificationSelect.disabled = Boolean(contractSelect.value);
-  });
-  form.append(qualificationSelect, contractSelect);
-  const submit = makeElement("button", "button button-primary", "Tải lên");
-  submit.type = "submit";
-  form.append(submit);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData();
-    data.append("file", file.files[0]);
-    if (select.value) data.append("checklist_item_id", select.value);
-    if (qualificationSelect.value)
-      data.append("qualification_id", qualificationSelect.value);
-    if (contractSelect.value) data.append("contract_id", contractSelect.value);
-    try {
-      await api(`/teachers/${state.selectedTeacherId}/documents`, {
-        method: "POST",
-        body: data,
-      });
-      showToast("Đã tải tài liệu lên.");
-      await renderDocuments();
-    } catch (error) {
-      showToast(error.message, true);
-    }
-  });
-  $("#workspace-form-region").append(form);
 }
 
 async function renderChanges() {
@@ -1315,158 +1021,6 @@ async function renderChanges() {
     });
     $("#workspace-form-region").append(form);
   }
-}
-
-async function renderChecklist() {
-  const items = await api("/checklist-items");
-  setTable(
-    [
-      "Mã",
-      "Tài liệu",
-      "Nhóm",
-      "Phân loại",
-      "Điều kiện áp dụng",
-      "Nhạy cảm",
-      "Trạng thái",
-      "Thao tác",
-    ],
-    items.map((item) => [
-      item.code,
-      item.label,
-      item.category,
-      checklistClassifications[item.classification] || item.classification,
-      item.applicability || "—",
-      item.is_sensitive ? "Có" : "Không",
-      item.is_active ? "Đang dùng" : "Đã ngừng",
-      actionGroup([
-        actionButton("Sửa điều kiện", "edit-checklist-item", item.id),
-        actionButton(
-          item.is_active ? "Ngừng" : "Kích hoạt",
-          "toggle-checklist-active",
-          item.id,
-        ),
-      ]),
-    ]),
-  );
-  $("#workspace-form-region").append(
-    buildForm(
-      [
-        {
-          name: "code",
-          label: "Mã mục (chữ thường, số, gạch ngang)",
-          required: true,
-        },
-        { name: "label", label: "Tên trường/tài liệu", required: true },
-        { name: "category", label: "Nhóm", required: true },
-        {
-          name: "classification",
-          label: "Phân loại trong danh mục",
-          type: "select",
-          required: true,
-          options: [
-            ["required", "Bắt buộc"],
-            ["conditional", "Có điều kiện"],
-            ["optional", "Tùy chọn"],
-          ],
-        },
-        {
-          name: "applicability",
-          label: "Điều kiện áp dụng (tối đa 500 ký tự)",
-        },
-        { name: "is_sensitive", label: "Dữ liệu nhạy cảm", type: "checkbox" },
-      ],
-      "Thêm mục checklist",
-      async (values) => {
-        values.is_sensitive = Boolean(values.is_sensitive);
-        await api("/checklist-items", {
-          method: "POST",
-          body: JSON.stringify(values),
-        });
-      },
-    ),
-  );
-}
-
-async function renderTeacherChecklist() {
-  const teacherId = Number(state.selectedTeacherId);
-  const teacher = state.teachers.find((item) => item.id === teacherId);
-  if (!teacher) {
-    showToast("Không tìm thấy giảng viên được chọn.", true);
-    navigate("teachers");
-    return;
-  }
-  const [requirements, completeness] = await Promise.all([
-    api(`/teachers/${teacherId}/checklist-requirements`),
-    api(`/teachers/${teacherId}/completeness`),
-  ]);
-  const summary = makeElement(
-    "p",
-    "page-subtitle",
-    `${teacher.employee_code} — ${teacher.full_name}. ` +
-      (completeness.is_complete
-        ? "Hồ sơ đầy đủ theo các yêu cầu đã rà soát."
-        : `Còn thiếu: ${completeness.missing.join(", ") || "không có"}. ` +
-          `Cần rà soát điều kiện: ${completeness.needs_review.join(", ") || "không có"}.`),
-  );
-  $("#workspace-form-region").append(summary);
-  setTable(
-    [
-      "Tài liệu",
-      "Nhóm",
-      "Phân loại",
-      "Điều kiện áp dụng",
-      "Yêu cầu với giảng viên",
-      "Minh chứng",
-    ],
-    requirements.map((item) => {
-      const select = document.createElement("select");
-      select.dataset.itemId = String(item.item_id);
-      for (const [value, label] of Object.entries(
-        checklistRequirementStatuses,
-      )) {
-        select.add(new Option(label, value));
-      }
-      select.value = item.status;
-      const evidence = makeElement(
-        "span",
-        "",
-        item.status === "required" && completeness.missing.includes(item.label)
-          ? "Chưa tải lên"
-          : item.status === "required"
-            ? "Đã có"
-            : "—",
-      );
-      return [
-        item.label,
-        item.category,
-        checklistClassifications[item.classification] || item.classification,
-        item.applicability || "—",
-        select,
-        evidence,
-      ];
-    }),
-  );
-  const backButton = makeElement("button", "row-action", "Quay lại danh sách");
-  backButton.type = "button";
-  backButton.addEventListener("click", () => navigate("teachers"));
-  $("#workspace-actions").append(backButton);
-  $$("#workspace-rows select").forEach((select) => {
-    select.addEventListener("change", async () => {
-      try {
-        await api(
-          `/teachers/${teacherId}/checklist-requirements/${select.dataset.itemId}`,
-          {
-            method: "PATCH",
-            body: JSON.stringify({ status: select.value }),
-          },
-        );
-        await renderTeacherChecklist();
-      } catch (error) {
-        showToast(error.message, true);
-        await renderTeacherChecklist();
-      }
-    });
-  });
 }
 
 async function renderReports() {
@@ -1885,7 +1439,7 @@ function inputField(config) {
   return wrapper;
 }
 
-function buildForm(fields, title, onSubmit) {
+function buildForm(fields, title, onSubmit, initialValues = {}, includeEmpty = false) {
   const form = document.createElement("form");
   form.className = "inline-form";
   form.append(makeElement("strong", "", title));
@@ -1894,6 +1448,12 @@ function buildForm(fields, title, onSubmit) {
     const wrapper = inputField(config);
     controls.set(config.name, wrapper.querySelector(`[name="${config.name}"]`));
     form.append(wrapper);
+  }
+  for (const [name, value] of Object.entries(initialValues)) {
+    const control = controls.get(name);
+    if (!control) continue;
+    if (control.type === "checkbox") control.checked = Boolean(value);
+    else control.value = value ?? "";
   }
   const submit = makeElement("button", "button button-primary", "Lưu");
   submit.type = "submit";
@@ -1904,6 +1464,7 @@ function buildForm(fields, title, onSubmit) {
     for (const [name, control] of controls) {
       if (control.type === "checkbox") values[name] = control.checked;
       else if (control.value !== "") values[name] = control.value;
+      else if (includeEmpty) values[name] = null;
     }
     try {
       await onSubmit(values);
@@ -2163,23 +1724,43 @@ function bindEvents() {
           break;
         case "teacher-detail":
           state.selectedTeacherId = String(id);
-          await navigate("qualifications");
+          state.detailTab = "info";
+          state.detailEdit = null;
+          navigate("teacherDetail");
           break;
         case "teacher-checklist":
           state.selectedTeacherId = String(id);
-          await navigate("teacherChecklist");
+          state.detailTab = "completeness";
+          state.detailEdit = null;
+          navigate("teacherDetail");
           break;
-        case "teacher-completeness": {
-          const result = await api(`/teachers/${id}/completeness`);
-          const review = result.needs_review.length
-            ? ` Cần rà soát điều kiện: ${result.needs_review.join(", ")}.`
-            : "";
-          showToast(
-            result.is_complete
-              ? "Hồ sơ đầy đủ theo các yêu cầu đã rà soát."
-              : `Còn thiếu: ${result.missing.join(", ") || "không có"}.${review}`,
-            !result.is_complete,
+        case "edit-qualification":
+          if (state.user.role !== "hr")
+            throw new Error("Bạn không có quyền sửa bằng cấp.");
+          state.detailEdit = { kind: "qualification", id };
+          await renderWorkspace();
+          break;
+        case "edit-contract":
+          if (state.user.role !== "hr")
+            throw new Error("Bạn không có quyền sửa hợp đồng.");
+          state.detailEdit = { kind: "contract", id };
+          await renderWorkspace();
+          break;
+        case "toggle-contract-status": {
+          if (state.user.role !== "hr")
+            throw new Error("Bạn không có quyền cập nhật hợp đồng.");
+          const contracts = await api(
+            `/teachers/${state.selectedTeacherId}/contracts`,
           );
+          const contract = contracts.find((item) => item.id === id);
+          if (!contract) throw new Error("Không tìm thấy hợp đồng cần cập nhật.");
+          await api(`/contracts/${id}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              status: contract.status === "terminated" ? "active" : "terminated",
+            }),
+          });
+          await renderWorkspace();
           break;
         }
         case "add-department":
@@ -2256,8 +1837,11 @@ function bindEvents() {
           break;
         }
         case "edit-checklist-item": {
+          if (state.user.role !== "hr")
+            throw new Error("Bạn không có quyền sửa danh mục checklist.");
           const items = await api("/checklist-items");
           const item = items.find((entry) => entry.id === id);
+          if (!item) throw new Error("Không tìm thấy mục checklist cần sửa.");
           const classification = window.prompt(
             "Phân loại: required, conditional hoặc optional",
             item?.classification || "conditional",
@@ -2280,8 +1864,11 @@ function bindEvents() {
           break;
         }
         case "toggle-checklist-active": {
+          if (state.user.role !== "hr")
+            throw new Error("Bạn không có quyền cập nhật danh mục checklist.");
           const items = await api("/checklist-items");
           const item = items.find((entry) => entry.id === id);
+          if (!item) throw new Error("Không tìm thấy mục checklist cần cập nhật.");
           await api(`/checklist-items/${id}`, {
             method: "PATCH",
             body: JSON.stringify({ is_active: !item.is_active }),
@@ -2350,12 +1937,17 @@ async function renderTeacherDetail() {
   $("#detail-title").textContent = teacher.full_name;
   $("#detail-subtitle").textContent =
     `${teacher.employee_code} · ${departmentName(teacher.department_id)}`;
-  $("#detail-actions").replaceChildren(
+  const actions = [
     detailButton("Danh sách", "detail-back", "chev", teacher.id, false),
-    detailButton("Sửa hồ sơ", "edit-teacher", "check", teacher.id, true),
-    detailButton("Checklist", "teacher-checklist", "list", teacher.id, false),
-    detailButton("Xóa hồ sơ", "delete-teacher", "trash", teacher.id, false),
-  );
+  ];
+  if (state.user.role === "hr") {
+    actions.push(
+      detailButton("Sửa hồ sơ", "edit-teacher", "check", teacher.id, true),
+      detailButton("Checklist", "teacher-checklist", "list", teacher.id, false),
+      detailButton("Xóa hồ sơ", "delete-teacher", "trash", teacher.id, false),
+    );
+  }
+  $("#detail-actions").replaceChildren(...actions);
   const tabs = $("#detail-tabs");
   tabs.replaceChildren();
   for (const [key, label] of detailTabs) {
@@ -2377,6 +1969,7 @@ async function drawDetailTab(teacher) {
   const body = $("#detail-body");
   body.replaceChildren();
   const id = teacher.id;
+  const isHr = state.user.role === "hr";
   if (state.detailTab === "info") {
     const list = makeElement("dl", "info-grid");
     const fields = [
@@ -2406,7 +1999,15 @@ async function drawDetailTab(teacher) {
     const items = await api(`/teachers/${id}/qualifications`);
     body.append(
       buildTable(
-        ["Loại", "Tên", "Chuyên ngành", "Cơ sở đào tạo", "Năm", "Ngày hết hạn"],
+        [
+          "Loại",
+          "Tên",
+          "Chuyên ngành",
+          "Cơ sở đào tạo",
+          "Năm",
+          "Ngày hết hạn",
+          ...(isHr ? ["Thao tác"] : []),
+        ],
         items.map((item) => [
           qualificationTypeLabels[item.qualification_type] ||
             item.qualification_type,
@@ -2415,60 +2016,501 @@ async function drawDetailTab(teacher) {
           item.institution,
           item.issued_year || item.issued_on,
           item.expires_on,
+          ...(isHr
+            ? [actionButton("Sửa", "edit-qualification", item.id)]
+            : []),
         ]),
         "Chưa có bằng cấp hoặc chứng chỉ.",
       ),
     );
+    if (isHr) {
+      const editing =
+        state.detailEdit?.kind === "qualification"
+          ? items.find((item) => item.id === state.detailEdit.id)
+          : null;
+      const fields = [
+        {
+          name: "qualification_type",
+          label: "Loại",
+          type: "select",
+          required: true,
+          options: [
+            ["degree", "Bằng cấp"],
+            ["certificate", "Chứng chỉ"],
+            ["research", "Nghiên cứu"],
+            ["other", "Khác"],
+          ],
+        },
+        { name: "title", label: "Tên văn bằng/chứng chỉ", required: true },
+        { name: "specialty", label: "Chuyên ngành" },
+        { name: "institution", label: "Cơ sở đào tạo" },
+        { name: "issued_year", label: "Năm cấp", type: "number" },
+        { name: "expires_on", label: "Ngày hết hạn (nếu có)", type: "date" },
+      ];
+      body.append(
+        buildForm(
+          fields,
+          editing
+            ? "Sửa bằng cấp hoặc chứng chỉ"
+            : "Thêm bằng cấp hoặc chứng chỉ",
+          async (values) => {
+            if (values.issued_year)
+              values.issued_year = Number(values.issued_year);
+            await api(
+              editing
+                ? `/qualifications/${editing.id}`
+                : `/teachers/${id}/qualifications`,
+              {
+                method: editing ? "PATCH" : "POST",
+                body: JSON.stringify(values),
+              },
+            );
+            state.detailEdit = null;
+          },
+          editing
+            ? {
+                qualification_type: editing.qualification_type,
+                title: editing.title,
+                specialty: editing.specialty,
+                institution: editing.institution,
+                issued_year: editing.issued_year,
+                expires_on: editing.expires_on,
+              }
+            : {},
+          Boolean(editing),
+        ),
+      );
+    }
   } else if (state.detailTab === "contracts") {
     const items = await api(`/teachers/${id}/contracts`);
+    if (isHr) {
+      state.contractWarningDays = (
+        await api("/settings/contract-warning-days")
+      ).days;
+      body.append(
+        buildForm(
+          [
+            {
+              name: "days",
+              label: `Cảnh báo trước bao nhiêu ngày (hiện tại ${state.contractWarningDays})`,
+              type: "number",
+              required: true,
+            },
+          ],
+          "Cấu hình cảnh báo hợp đồng",
+          async (values) => {
+            const days = Number(values.days);
+            if (!Number.isInteger(days) || days < 0 || days > 365)
+              throw new Error("Số ngày phải từ 0 đến 365.");
+            await api(`/settings/contract-warning-days?days=${days}`, {
+              method: "PUT",
+            });
+            state.contractWarningDays = days;
+          },
+          { days: state.contractWarningDays },
+        ),
+      );
+    }
     body.append(
       buildTable(
-        ["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"],
+        [
+          "Mã hợp đồng",
+          "Loại",
+          "Bắt đầu",
+          "Kết thúc",
+          "Trạng thái",
+          ...(isHr ? ["Thao tác"] : []),
+        ],
         items.map((item) => [
           item.contract_code,
           item.contract_type,
           item.starts_on,
           item.ends_on || "Không thời hạn",
           badge(item.display_status),
+          ...(isHr
+            ? [
+                actionGroup([
+                  actionButton("Sửa", "edit-contract", item.id),
+                  actionButton(
+                    item.status === "terminated" ? "Kích hoạt" : "Chấm dứt",
+                    "toggle-contract-status",
+                    item.id,
+                  ),
+                ]),
+              ]
+            : []),
         ]),
         "Chưa có hợp đồng.",
       ),
     );
+    if (isHr) {
+      const editing =
+        state.detailEdit?.kind === "contract"
+          ? items.find((item) => item.id === state.detailEdit.id)
+          : null;
+      const fields = [
+        { name: "contract_code", label: "Mã hợp đồng", required: true },
+        { name: "contract_type", label: "Loại hợp đồng", required: true },
+        { name: "signed_on", label: "Ngày ký", type: "date" },
+        {
+          name: "starts_on",
+          label: "Ngày bắt đầu",
+          type: "date",
+          required: true,
+        },
+        { name: "ends_on", label: "Ngày kết thúc", type: "date" },
+        ...(editing
+          ? [
+              {
+                name: "status",
+                label: "Trạng thái",
+                type: "select",
+                required: true,
+                options: [
+                  ["active", "Đang hiệu lực"],
+                  ["terminated", "Đã chấm dứt"],
+                ],
+              },
+            ]
+          : []),
+      ];
+      body.append(
+        buildForm(
+          fields,
+          editing ? "Sửa hợp đồng" : "Thêm hợp đồng",
+          async (values) => {
+            await api(
+              editing
+                ? `/contracts/${editing.id}`
+                : `/teachers/${id}/contracts`,
+              {
+                method: editing ? "PATCH" : "POST",
+                body: JSON.stringify(values),
+              },
+            );
+            state.detailEdit = null;
+          },
+          editing
+            ? {
+                contract_code: editing.contract_code,
+                contract_type: editing.contract_type,
+                signed_on: editing.signed_on,
+                starts_on: editing.starts_on,
+                ends_on: editing.ends_on,
+                status: editing.status,
+              }
+            : {},
+          Boolean(editing),
+        ),
+      );
+    }
   } else if (state.detailTab === "history") {
-    body.append(buildTimeline(await api(`/teachers/${id}/work-history`)));
+    const history = await api(`/teachers/${id}/work-history`);
+    body.append(buildTimeline(history));
+    body.append(
+      buildTable(
+        ["Đơn vị", "Chức danh", "Bắt đầu", "Kết thúc", "Lý do"],
+        history.map((item) => [
+          state.departments.find((unit) => unit.id === item.department_id)
+            ?.name || "—",
+          item.position_title || "—",
+          item.starts_on,
+          item.ends_on || "Hiện tại",
+          item.reason || "—",
+        ]),
+        "Chưa có quá trình công tác.",
+      ),
+    );
+    if (isHr) {
+      body.append(
+        buildForm(
+          [
+            {
+              name: "department_id",
+              label: "Đơn vị",
+              type: "select",
+              required: true,
+              options: state.departments.map((unit) => [
+                String(unit.id),
+                unit.name,
+              ]),
+            },
+            { name: "position_title", label: "Chức danh" },
+            {
+              name: "starts_on",
+              label: "Ngày bắt đầu",
+              type: "date",
+              required: true,
+            },
+            { name: "ends_on", label: "Ngày kết thúc", type: "date" },
+            { name: "reason", label: "Lý do" },
+          ],
+          "Bổ sung giai đoạn công tác",
+          async (values) => {
+            values.department_id = Number(values.department_id);
+            await api(`/teachers/${id}/work-history`, {
+              method: "POST",
+              body: JSON.stringify(values),
+            });
+          },
+        ),
+      );
+    }
   } else if (state.detailTab === "docs") {
     const items = await api(`/teachers/${id}/documents`);
     body.append(
       buildTable(
-        ["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"],
+        ["Tài liệu", "Dung lượng", "Ngày tải", ...(isHr ? ["Tải xuống"] : [])],
         items.map((item) => [
           item.original_name,
           `${Math.ceil(item.size_bytes / 1024)} KB`,
           new Date(item.created_at).toLocaleString("vi-VN"),
-          actionButton("Tải tệp", "download-document", item.id),
+          ...(isHr
+            ? [actionButton("Tải tệp", "download-document", item.id)]
+            : []),
         ]),
         "Chưa có tài liệu minh chứng.",
       ),
     );
+    if (isHr) {
+      const [checklist, qualifications, contracts] = await Promise.all([
+        api("/checklist-items"),
+        api(`/teachers/${id}/qualifications`),
+        api(`/teachers/${id}/contracts`),
+      ]);
+      const form = document.createElement("form");
+      form.className = "inline-form";
+      form.append(makeElement("strong", "", "Tải minh chứng"));
+      const fileLabel = makeElement("label", "form-field");
+      fileLabel.append(makeElement("span", "", "Chọn tệp"));
+      const file = document.createElement("input");
+      file.type = "file";
+      file.name = "file";
+      file.accept = ".pdf,.png,.jpg,.jpeg";
+      file.required = true;
+      fileLabel.append(file);
+      form.append(fileLabel);
+
+      const checklistLabel = makeElement("label", "form-field");
+      checklistLabel.append(makeElement("span", "", "Gắn checklist"));
+      const checklistSelect = document.createElement("select");
+      checklistSelect.name = "checklist_item_id";
+      checklistSelect.append(new Option("Không gắn checklist", ""));
+      checklist
+        .filter((item) => item.is_active)
+        .forEach((item) =>
+          checklistSelect.add(new Option(item.label, String(item.id))),
+        );
+      checklistLabel.append(checklistSelect);
+      form.append(checklistLabel);
+
+      const qualificationLabel = makeElement("label", "form-field");
+      qualificationLabel.append(makeElement("span", "", "Gắn bằng cấp"));
+      const qualificationSelect = document.createElement("select");
+      qualificationSelect.name = "qualification_id";
+      qualificationSelect.append(new Option("Không gắn bằng cấp", ""));
+      qualifications.forEach((item) =>
+        qualificationSelect.add(new Option(item.title, String(item.id))),
+      );
+      qualificationLabel.append(qualificationSelect);
+      form.append(qualificationLabel);
+
+      const contractLabel = makeElement("label", "form-field");
+      contractLabel.append(makeElement("span", "", "Gắn hợp đồng"));
+      const contractSelect = document.createElement("select");
+      contractSelect.name = "contract_id";
+      contractSelect.append(new Option("Không gắn hợp đồng", ""));
+      contracts.forEach((item) =>
+        contractSelect.add(new Option(item.contract_code, String(item.id))),
+      );
+      contractLabel.append(contractSelect);
+      form.append(contractLabel);
+
+      qualificationSelect.addEventListener("change", () => {
+        contractSelect.disabled = Boolean(qualificationSelect.value);
+      });
+      contractSelect.addEventListener("change", () => {
+        qualificationSelect.disabled = Boolean(contractSelect.value);
+      });
+      const submit = makeElement("button", "button button-primary", "Tải lên");
+      submit.type = "submit";
+      form.append(submit);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const data = new FormData();
+        data.append("file", file.files[0]);
+        if (checklistSelect.value)
+          data.append("checklist_item_id", checklistSelect.value);
+        if (qualificationSelect.value)
+          data.append("qualification_id", qualificationSelect.value);
+        if (contractSelect.value)
+          data.append("contract_id", contractSelect.value);
+        try {
+          await api(`/teachers/${id}/documents`, {
+            method: "POST",
+            body: data,
+          });
+          showToast("Đã tải tài liệu lên.");
+          await renderWorkspace();
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      body.append(form);
+    }
   } else {
-    const result = await api(`/teachers/${id}/completeness`);
-    if (result.is_complete) {
+    const [requirements, completeness] = await Promise.all([
+      api(`/teachers/${id}/checklist-requirements`),
+      api(`/teachers/${id}/completeness`),
+    ]);
+    body.append(
+      makeElement(
+        "p",
+        "page-subtitle",
+        `${teacher.employee_code} — ${teacher.full_name}. ` +
+          (completeness.is_complete
+            ? "Hồ sơ đầy đủ theo các yêu cầu đã rà soát."
+            : `Còn thiếu: ${completeness.missing.join(", ") || "không có"}. ` +
+              `Cần rà soát điều kiện: ${completeness.needs_review.join(", ") || "không có"}.`),
+      ),
+    );
+    body.append(
+      buildTable(
+        [
+          "Tài liệu",
+          "Nhóm",
+          "Phân loại",
+          "Điều kiện áp dụng",
+          "Yêu cầu với giảng viên",
+          "Minh chứng",
+        ],
+        requirements.map((item) => {
+          let requirementStatus;
+          if (isHr) {
+            requirementStatus = document.createElement("select");
+            requirementStatus.dataset.itemId = String(item.item_id);
+            for (const [value, label] of Object.entries(
+              checklistRequirementStatuses,
+            )) {
+              requirementStatus.add(new Option(label, value));
+            }
+            requirementStatus.value = item.status;
+            requirementStatus.addEventListener("change", async () => {
+              requirementStatus.disabled = true;
+              try {
+                await api(
+                  `/teachers/${id}/checklist-requirements/${item.item_id}`,
+                  {
+                    method: "PATCH",
+                    body: JSON.stringify({ status: requirementStatus.value }),
+                  },
+                );
+                showToast("Đã cập nhật yêu cầu checklist.");
+                await renderWorkspace();
+              } catch (error) {
+                showToast(error.message, true);
+                await drawDetailTab(teacher);
+              }
+            });
+          } else {
+            requirementStatus = checklistRequirementStatuses[item.status];
+          }
+          const evidence = makeElement(
+            "span",
+            "",
+            item.status === "required" &&
+              completeness.missing.includes(item.label)
+              ? "Chưa tải lên"
+              : item.status === "required"
+                ? "Đã có"
+                : "—",
+          );
+          return [
+            item.label,
+            item.category,
+            checklistClassifications[item.classification] ||
+              item.classification,
+            item.applicability || "—",
+            requirementStatus,
+            evidence,
+          ];
+        }),
+        "Chưa có mục checklist cần rà soát.",
+      ),
+    );
+    if (isHr) {
+      body.append(makeElement("h3", "detail-section-title", "Quản lý danh mục checklist"));
+      const items = await api("/checklist-items");
       body.append(
-        makeElement(
-          "p",
-          "empty-state",
-          "Hồ sơ đã đầy đủ theo các yêu cầu đã rà soát.",
+        buildTable(
+          [
+            "Mã",
+            "Tài liệu",
+            "Nhóm",
+            "Phân loại",
+            "Điều kiện áp dụng",
+            "Nhạy cảm",
+            "Trạng thái",
+            "Thao tác",
+          ],
+          items.map((item) => [
+            item.code,
+            item.label,
+            item.category,
+            checklistClassifications[item.classification] ||
+              item.classification,
+            item.applicability || "—",
+            item.is_sensitive ? "Có" : "Không",
+            item.is_active ? "Đang dùng" : "Đã ngừng",
+            actionGroup([
+              actionButton("Sửa điều kiện", "edit-checklist-item", item.id),
+              actionButton(
+                item.is_active ? "Ngừng" : "Kích hoạt",
+                "toggle-checklist-active",
+                item.id,
+              ),
+            ]),
+          ]),
+          "Chưa có mục checklist.",
         ),
       );
-    } else {
-      const list = makeElement("ul", "check-list");
-      result.missing.forEach((item) =>
-        list.append(makeElement("li", "", `Còn thiếu: ${item}`)),
+      body.append(
+        buildForm(
+          [
+            {
+              name: "code",
+              label: "Mã mục (chữ thường, số, gạch ngang)",
+              required: true,
+            },
+            { name: "label", label: "Tên trường/tài liệu", required: true },
+            { name: "category", label: "Nhóm", required: true },
+            {
+              name: "classification",
+              label: "Phân loại trong danh mục",
+              type: "select",
+              required: true,
+              options: [
+                ["required", "Bắt buộc"],
+                ["conditional", "Có điều kiện"],
+                ["optional", "Tùy chọn"],
+              ],
+            },
+            {
+              name: "applicability",
+              label: "Điều kiện áp dụng (tối đa 500 ký tự)",
+            },
+            { name: "is_sensitive", label: "Dữ liệu nhạy cảm", type: "checkbox" },
+          ],
+          "Thêm mục checklist",
+          async (values) => {
+            values.is_sensitive = Boolean(values.is_sensitive);
+            await api("/checklist-items", {
+              method: "POST",
+              body: JSON.stringify(values),
+            });
+          },
+        ),
       );
-      result.needs_review.forEach((item) =>
-        list.append(makeElement("li", "", `Cần rà soát điều kiện: ${item}`)),
-      );
-      body.append(list);
     }
   }
 }
@@ -2718,6 +2760,7 @@ function bindNewEvents() {
         case "teacher-open":
           state.selectedTeacherId = String(id);
           state.detailTab = "info";
+          state.detailEdit = null;
           navigate("teacherDetail");
           break;
         case "detail-back":
@@ -2725,6 +2768,7 @@ function bindNewEvents() {
           break;
         case "detail-tab": {
           state.detailTab = button.dataset.tab;
+          state.detailEdit = null;
           const teacher = state.teachers.find(
             (item) => String(item.id) === String(state.selectedTeacherId),
           );

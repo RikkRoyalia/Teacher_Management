@@ -1045,6 +1045,10 @@ textarea:focus {
   color: var(--blue);
   border-bottom-color: var(--blue);
 }
+.detail-section-title {
+  margin: 22px 0 12px;
+  font-size: 17px;
+}
 .info-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
