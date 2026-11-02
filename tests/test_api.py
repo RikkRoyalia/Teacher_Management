@@ -81,7 +81,7 @@ class TeacherManagementApiTests(unittest.TestCase):
     def test_authentication_static_assets_and_api_access(self) -> None:
         page = self.client.get("/")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("TeacherHub", page.text)
+        self.assertIn("Hệ thống Quản lý Giảng viên", page.text)
         self.assertIn('id="teacher-form"', page.text)
         self.assertIn('id="account-form"', page.text)
         self.assertIn('data-view="lecturer"', page.text)

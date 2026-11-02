@@ -7,7 +7,7 @@
 ## Tài liệu yêu cầu
 
 - `requirement.md` mô tả đề xuất ban đầu: quản lý hồ sơ giảng viên, thống kê nhân sự, tài khoản và phân quyền; có lọc theo khoa và trình độ chuyên môn.
-- `LẬP TRÌNH WEB.md` mở rộng yêu cầu thành các quy trình và mười nhóm chức năng bên dưới.
+- `ltweb.md` mở rộng yêu cầu thành các quy trình và nhóm chức năng chi tiết.
 - Khi triển khai, dùng các tài liệu trên làm nguồn yêu cầu chi tiết. Nếu có điểm chưa rõ hoặc khác nhau, không tự suy diễn quy tắc nghiệp vụ; ưu tiên bảo toàn dữ liệu và nêu rõ giả định cần xác nhận.
 
 ## Công nghệ dự kiến
@@ -19,17 +19,20 @@
 - Backend API dùng FastAPI; dữ liệu lưu qua SQLAlchemy, mặc định dùng SQLite trong `teacher_management.db`.
 - Mã backend nằm trong `app/`; `app/main.py` tạo ứng dụng và API, `app/models.py` định nghĩa bảng, `app/schemas.py` định nghĩa dữ liệu vào/ra, `app/database.py` cấu hình kết nối.
 - Frontend tĩnh không cần framework nằm trong `app/static/`; `index.html`, `styles.css` và `app.js` được phục vụ tại `/`.
-- Đã có API tạo/liệt kê/cập nhật khoa và tạo/liệt kê/xem/cập nhật hồ sơ giảng viên. Hồ sơ có thể lọc theo từ khóa, khoa, trình độ và trạng thái.
-- Giao diện hiện có bảng tổng quan, danh sách/lọc, tạo/sửa hồ sơ và quản lý khoa/bộ môn; đơn vị có thể ngừng hoạt động thay vì xóa vật lý.
-- Bảng được khởi tạo bằng SQLAlchemy khi ứng dụng khởi động; hiện chưa có hệ thống migration.
+- Đã có API quản lý khoa/đơn vị và hồ sơ giảng viên, gồm tìm kiếm/lọc theo từ khóa, khoa, trình độ và trạng thái; đơn vị được ngừng hoạt động thay vì xóa vật lý.
+- Giao diện tĩnh tại `app/static/` cung cấp tổng quan, quản lý hồ sơ và đơn vị, báo cáo, quản trị tài khoản, nhật ký hoạt động và cổng giảng viên.
+- Dữ liệu được nâng cấp bằng Alembic khi ứng dụng khởi động; với SQLite hiện có, ứng dụng tạo bản sao trước migration. Xem `app/migrations/` và `app/database.py`.
 - Bộ kiểm thử dùng `unittest`, đặt trong `tests/`; lệnh chạy là `python -m unittest discover -v`.
-- Giao diện web cơ bản đã có; xác thực và phân quyền chưa được triển khai. API và frontend hiện chỉ dành cho local với dữ liệu thử nghiệm; xem lưu ý bảo mật trong `README.md`.
+- Đã có xác thực, quản lý tài khoản, RBAC kiểm tra tại backend, session/CSRF, giới hạn truy cập theo hồ sơ, audit, backup/restore và quy trình duyệt thay đổi/tài liệu.
+- Tài khoản giảng viên do admin tạo và liên kết với hồ sơ có sẵn; giảng viên chỉ xem/nộp tài liệu cho hồ sơ của mình. Tài liệu upload chờ HR rà soát trước khi được tính là hoàn tất checklist.
+- Hệ thống hiện chỉ dành cho chạy local với dữ liệu thử nghiệm, chưa sẵn sàng cho truy cập mạng hoặc dữ liệu nhân sự thật; xem giới hạn và lưu ý bảo mật trong `README.md`.
 
 ## Người dùng và quyền hạn
 
 - **Quản trị viên:** quản lý tài khoản và vai trò.
 - **Nhân viên nhân sự:** quản lý hồ sơ và dữ liệu nhân sự; tạo yêu cầu thay đổi theo quy trình.
 - **Người quản lý:** xem báo cáo và xử lý yêu cầu thay đổi khi được phân quyền.
+- **Giảng viên:** xem hồ sơ đã liên kết và nộp tài liệu minh chứng để nhân sự rà soát.
 
 Áp dụng phân quyền theo vai trò (RBAC). Phải kiểm tra quyền ở Backend cho cả chức năng lẫn dữ liệu; không xem việc ẩn nút trên giao diện là kiểm soát quyền. Người dùng không được tự nâng quyền trái phép. Quyền quản trị hệ thống không đồng nghĩa với quyền phê duyệt nghiệp vụ.
 
