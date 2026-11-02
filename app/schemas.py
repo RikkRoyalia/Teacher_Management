@@ -32,6 +32,10 @@ class PasswordChange(InputModel):
     new_password: str = Field(min_length=12, max_length=256)
 
 
+class PasswordReset(InputModel):
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class UserCreate(InputModel):
     username: str = Field(min_length=3, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
     full_name: str = Field(min_length=1, max_length=160)

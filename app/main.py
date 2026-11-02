@@ -21,8 +21,9 @@ from fastapi import (
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import func, or_, select, update
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -61,6 +62,7 @@ from app.schemas import (
     EvidenceDocumentRead,
     LoginInput,
     PasswordChange,
+    PasswordReset,
     QualificationCreate,
     QualificationRead,
     QualificationUpdate,
@@ -420,6 +422,29 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         db.refresh(target)
         return target
 
+    @application.post("/users/{user_id}/reset-password", tags=["accounts"])
+    def reset_user_password(
+        user_id: int,
+        payload: PasswordReset,
+        db: DbSession,
+        actor: ADMIN_USER,
+    ) -> dict[str, str]:
+        target = db.get(User, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        if target.id == actor.id:
+            raise HTTPException(
+                status_code=400, detail="Use the change-password function for your own account."
+            )
+        target.password_hash = hash_password(payload.new_password)
+        target.failed_login_attempts = 0
+        target.locked_until = None
+        for login_session in db.scalars(select(LoginSession).where(LoginSession.user_id == target.id)):
+            db.delete(login_session)
+        record_audit(db, actor, "password_reset", "user", target.id)
+        db.commit()
+        return {"status": "password_reset"}
+
     @application.post(
         "/departments",
         response_model=DepartmentRead,
@@ -497,25 +522,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         db.add(teacher)
         try:
             db.flush()
-            for item in db.scalars(
-                select(ChecklistItem).where(ChecklistItem.is_active.is_(True))
-            ):
-                db.add(
-                    TeacherChecklistRequirement(
-                        teacher_id=teacher.id,
-                        checklist_item_id=item.id,
-                        status=_default_checklist_status(item),
-                    )
-                )
-            db.add(
-                WorkHistory(
-                    teacher_id=teacher.id,
-                    department_id=teacher.department_id,
-                    position_title=teacher.academic_title,
-                    starts_on=date.today(),
-                    reason="Initial employment record",
-                )
-            )
+            _initialize_teacher(db, teacher)
             record_audit(db, actor, "teacher_created", "teacher", teacher.id)
             db.commit()
         except IntegrityError as error:
@@ -551,6 +558,128 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         if employment_status:
             statement = statement.where(Teacher.employment_status == employment_status)
         return list(db.scalars(statement.order_by(Teacher.full_name, Teacher.id)))
+
+    @application.get("/teachers/export.xlsx", tags=["teachers"])
+    def export_teachers(
+        db: DbSession,
+        actor: HR_USER,
+        q: Annotated[str | None, Query(min_length=1, max_length=160)] = None,
+        department_id: int | None = Query(default=None, gt=0),
+        academic_degree: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
+        employment_status: str | None = Query(default=None, pattern="^(active|paused|ended)$"),
+    ) -> StreamingResponse:
+        teachers = list_teachers(db, actor, q, department_id, academic_degree, employment_status)
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Giang vien"
+        sheet.append(["Mã giảng viên", "Họ tên", "Ngày sinh", "Giới tính", "Email", "Điện thoại",
+                      "Địa chỉ", "Đơn vị", "Trình độ", "Chức danh", "Trạng thái", "Hồ sơ"])
+        for teacher in teachers:
+            sheet.append([_safe_cell(value) for value in (
+                teacher.employee_code,
+                teacher.full_name,
+                teacher.date_of_birth.isoformat() if teacher.date_of_birth else "",
+                teacher.gender or "",
+                teacher.email or "",
+                teacher.phone or "",
+                teacher.address or "",
+                teacher.department.name if teacher.department else "",
+                teacher.academic_degree or "",
+                teacher.academic_title or "",
+                EMPLOYMENT_STATUS_LABELS.get(teacher.employment_status, teacher.employment_status),
+                "Đầy đủ" if not _missing_requirements(db, teacher) else "Còn thiếu",
+            )])
+        record_audit(db, actor, "teachers_exported", "teacher", None, details={"count": len(teachers)})
+        db.commit()
+        return _xlsx_response(workbook, "danh_sach_giang_vien.xlsx")
+
+    @application.get("/teachers/import-template.xlsx", tags=["teachers"])
+    def teacher_import_template(_: HR_USER) -> StreamingResponse:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Mau nhap"
+        sheet.append([label for _, label in IMPORT_COLUMNS])
+        sheet.append(["GV001", "Nguyễn Văn A", "CNTT", "1985-05-20", "Nam", "a@example.edu.vn",
+                      "0900000000", "Hà Nội", "Tiến sĩ", "Giảng viên chính", "Đang công tác"])
+        return _xlsx_response(workbook, "mau_nhap_giang_vien.xlsx")
+
+    @application.post("/teachers/import", tags=["teachers"])
+    async def import_teachers(
+        db: DbSession,
+        actor: HR_USER,
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        if not data or len(data) > MAX_UPLOAD_BYTES or not data.startswith(b"PK"):
+            raise HTTPException(status_code=400, detail="Vui lòng chọn tệp .xlsx hợp lệ (tối đa 10 MB).")
+        try:
+            sheet = load_workbook(BytesIO(data), read_only=True, data_only=True).worksheets[0]
+            rows = list(sheet.iter_rows(values_only=True))
+        except Exception as error:
+            raise HTTPException(status_code=400, detail="Không đọc được tệp Excel.") from error
+        if not rows:
+            raise HTTPException(status_code=400, detail="Tệp Excel không có dữ liệu.")
+        header = [str(cell).strip() if cell is not None else "" for cell in rows[0]]
+        labels = {key: label for key, label in IMPORT_COLUMNS}
+        index = {key: header.index(label) for key, label in labels.items() if label in header}
+        if not {"employee_code", "full_name", "department_code"} <= set(index):
+            raise HTTPException(
+                status_code=400,
+                detail="Thiếu cột bắt buộc: Mã giảng viên, Họ tên, Mã đơn vị. Hãy dùng tệp mẫu.",
+            )
+        body = [row for row in rows[1:] if any(cell not in (None, "") for cell in row)]
+        if len(body) > MAX_IMPORT_ROWS:
+            raise HTTPException(status_code=400, detail=f"Tối đa {MAX_IMPORT_ROWS} dòng mỗi lần nhập.")
+        departments = {
+            item.code.lower(): item.id
+            for item in db.scalars(select(Department).where(Department.is_active.is_(True)))
+        }
+        seen = set(db.scalars(select(Teacher.employee_code)))
+        errors: list[dict[str, Any]] = []
+        valid: list[TeacherCreate] = []
+        for offset, row in enumerate(body, start=2):
+            raw = {key: _cell_text(row[pos]) if pos < len(row) else "" for key, pos in index.items()}
+            code = raw.get("department_code", "").lower()
+            if code not in departments:
+                errors.append({"row": offset, "message": "Mã đơn vị không tồn tại hoặc đã ngừng hoạt động."})
+                continue
+            status_value = EMPLOYMENT_STATUS_BY_LABEL.get(
+                raw.get("employment_status", "").lower(), raw.get("employment_status", "").lower() or "active"
+            )
+            try:
+                payload = TeacherCreate(
+                    employee_code=raw.get("employee_code", ""),
+                    full_name=raw.get("full_name", ""),
+                    department_id=departments[code],
+                    date_of_birth=_cell_date(row[index["date_of_birth"]]) if "date_of_birth" in index and index["date_of_birth"] < len(row) else None,
+                    gender=raw.get("gender") or None,
+                    email=raw.get("email") or None,
+                    phone=raw.get("phone") or None,
+                    address=raw.get("address") or None,
+                    academic_degree=raw.get("academic_degree") or None,
+                    academic_title=raw.get("academic_title") or None,
+                    employment_status=status_value,
+                )
+            except (ValidationError, ValueError) as error:
+                message = error.errors()[0]["msg"] if isinstance(error, ValidationError) else str(error)
+                errors.append({"row": offset, "message": f"Dữ liệu không hợp lệ: {message}"})
+                continue
+            if payload.employee_code in seen:
+                errors.append({"row": offset, "message": "Mã giảng viên đã tồn tại hoặc bị trùng trong tệp."})
+                continue
+            seen.add(payload.employee_code)
+            valid.append(payload)
+        for payload in valid:
+            teacher = Teacher(**payload.model_dump())
+            db.add(teacher)
+            db.flush()
+            _initialize_teacher(db, teacher)
+        record_audit(
+            db, actor, "teachers_imported", "teacher", None,
+            details={"created": len(valid), "skipped": len(errors)},
+        )
+        db.commit()
+        return {"created": len(valid), "skipped": len(errors), "errors": errors[:50]}
 
     @application.get(
         "/teachers/{teacher_id}",
@@ -1116,6 +1245,81 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         db.commit()
         return {"days": days}
 
+    @application.get("/notifications", tags=["notifications"])
+    def list_notifications(
+        db: DbSession,
+        user: Annotated[User, Depends(require_roles("admin", "hr", "manager"))],
+    ) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        items: list[dict[str, Any]] = []
+        if user.role == "hr":
+            since = now - timedelta(days=30)
+            outcomes = {
+                "needs_info": ("Yêu cầu cần bổ sung thông tin", "warning"),
+                "rejected": ("Yêu cầu bị từ chối", "danger"),
+                "approved": ("Yêu cầu đã được duyệt", "success"),
+            }
+            for item in db.scalars(
+                select(ChangeRequest)
+                .where(
+                    ChangeRequest.requester_id == user.id,
+                    ChangeRequest.status.in_(list(outcomes)),
+                    ChangeRequest.processed_at.is_not(None),
+                )
+                .order_by(ChangeRequest.processed_at.desc())
+                .limit(20)
+            ):
+                processed = _as_utc(item.processed_at)
+                if processed < since:
+                    continue
+                title, level = outcomes[item.status]
+                items.append({
+                    "id": f"change-{item.id}-{item.status}",
+                    "level": level,
+                    "title": title,
+                    "message": f"Yêu cầu #{item.id} ({item.change_type})."
+                    + (f" Lý do: {item.resolution_reason}" if item.resolution_reason else ""),
+                    "created_at": processed,
+                    "view": "changes",
+                })
+            alerts = db.scalar(
+                select(func.count()).select_from(EmploymentContract).where(
+                    EmploymentContract.status == "active",
+                    EmploymentContract.ends_on.is_not(None),
+                    EmploymentContract.ends_on <= date.today() + timedelta(days=_contract_warning_days(db)),
+                )
+            )
+            if alerts:
+                items.append({
+                    "id": f"contracts-{alerts}", "level": "warning",
+                    "title": "Hợp đồng sắp hoặc đã hết hạn",
+                    "message": f"Có {alerts} hợp đồng cần theo dõi.",
+                    "created_at": now, "view": "overview",
+                })
+        elif user.role == "manager":
+            pending = list(db.scalars(
+                select(ChangeRequest).where(
+                    ChangeRequest.status == "pending", ChangeRequest.requester_id != user.id
+                ).order_by(ChangeRequest.created_at.desc())
+            ))
+            if pending:
+                items.append({
+                    "id": f"pending-{len(pending)}", "level": "info",
+                    "title": "Yêu cầu đang chờ duyệt",
+                    "message": f"Có {len(pending)} yêu cầu thay đổi cần xử lý.",
+                    "created_at": _as_utc(pending[0].created_at), "view": "changes",
+                })
+        else:
+            locked = db.scalar(select(func.count()).select_from(User).where(User.is_active.is_(False)))
+            if locked:
+                items.append({
+                    "id": f"locked-{locked}", "level": "info",
+                    "title": "Tài khoản đang bị khóa",
+                    "message": f"Có {locked} tài khoản đang bị khóa.",
+                    "created_at": now, "view": "accounts",
+                })
+        return sorted(items, key=lambda entry: entry["created_at"], reverse=True)
+
     @application.get("/reports/summary", tags=["reports"])
     def report_summary(
         db: DbSession,
@@ -1138,7 +1342,10 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         complete_count = sum(not _missing_requirements(db, teacher) for teacher in teachers)
         status_counts: dict[str, int] = {}
         degree_counts: dict[str, int] = {}
+        title_counts: dict[str, int] = {}
         for teacher in teachers:
+            if teacher.academic_title:
+                title_counts[teacher.academic_title] = title_counts.get(teacher.academic_title, 0) + 1
             status_counts[teacher.employment_status] = status_counts.get(teacher.employment_status, 0) + 1
             if teacher.academic_degree:
                 degree_counts[teacher.academic_degree] = degree_counts.get(teacher.academic_degree, 0) + 1
@@ -1179,6 +1386,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             "total_teachers": len(teachers),
             "teachers_by_status": status_counts,
             "teachers_by_degree": degree_counts,
+            "teachers_by_title": title_counts,
             "teachers_by_department": department_counts,
             "incomplete_profiles": len(teachers) - complete_count,
             "expiring_or_expired_contracts": len(contracts),
@@ -1230,6 +1438,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         for label, values in (
             ("Trạng thái", summary["teachers_by_status"]),
             ("Trình độ", summary["teachers_by_degree"]),
+            ("Chức danh", summary["teachers_by_title"]),
             ("Đơn vị", summary["teachers_by_department"]),
             ("Yêu cầu thay đổi", summary["change_requests_by_status"]),
         ):
@@ -1451,6 +1660,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         start_date: date | None = None,
         end_date: date | None = None,
         limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
     ) -> list[dict[str, Any]]:
         statement = select(AuditLog)
         if actor_id is not None:
@@ -1461,7 +1671,9 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             statement = statement.where(func.date(AuditLog.created_at) >= start_date.isoformat())
         if end_date:
             statement = statement.where(func.date(AuditLog.created_at) <= end_date.isoformat())
-        logs = db.scalars(statement.order_by(AuditLog.created_at.desc()).limit(limit))
+        logs = db.scalars(
+            statement.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit)
+        )
         return [
             {
                 "id": item.id,
@@ -1477,6 +1689,78 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         ]
 
     return application
+
+
+EMPLOYMENT_STATUS_LABELS = {"active": "Đang công tác", "paused": "Tạm ngừng", "ended": "Đã kết thúc"}
+EMPLOYMENT_STATUS_BY_LABEL = {
+    **{label.lower(): key for key, label in EMPLOYMENT_STATUS_LABELS.items()},
+    "active": "active", "paused": "paused", "ended": "ended",
+}
+IMPORT_COLUMNS = [
+    ("employee_code", "Mã giảng viên"), ("full_name", "Họ tên"), ("department_code", "Mã đơn vị"),
+    ("date_of_birth", "Ngày sinh"), ("gender", "Giới tính"), ("email", "Email"),
+    ("phone", "Điện thoại"), ("address", "Địa chỉ"), ("academic_degree", "Trình độ"),
+    ("academic_title", "Chức danh"), ("employment_status", "Trạng thái"),
+]
+MAX_IMPORT_ROWS = 500
+
+
+def _initialize_teacher(db: Session, teacher: Teacher) -> None:
+    for item in db.scalars(select(ChecklistItem).where(ChecklistItem.is_active.is_(True))):
+        db.add(
+            TeacherChecklistRequirement(
+                teacher_id=teacher.id,
+                checklist_item_id=item.id,
+                status=_default_checklist_status(item),
+            )
+        )
+    db.add(
+        WorkHistory(
+            teacher_id=teacher.id,
+            department_id=teacher.department_id,
+            position_title=teacher.academic_title,
+            starts_on=date.today(),
+            reason="Initial employment record",
+        )
+    )
+
+
+def _safe_cell(value: Any) -> Any:
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
+def _cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (datetime, date)):
+        return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
+    return str(value).strip()
+
+
+def _cell_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as error:
+        raise ValueError("Ngày sinh phải theo dạng YYYY-MM-DD.") from error
+
+
+def _xlsx_response(workbook: Workbook, filename: str) -> StreamingResponse:
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _require_csrf(request: Request) -> None:

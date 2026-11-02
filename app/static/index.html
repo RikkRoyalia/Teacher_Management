@@ -1,150 +1,870 @@
 <!doctype html>
 <html lang="vi">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f6f7fb">
-    <meta name="description" content="Quản lý hồ sơ giảng viên, quy trình và báo cáo nội bộ">
-    <title>TeacherHub — Quản lý giảng viên</title>
-    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b7bc1" />
+    <meta
+      name="description"
+      content="Hệ thống Quản lý Giảng viên – Đại học Kinh tế Quốc dân"
+    />
+    <title>Hệ thống Quản lý Giảng viên</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
   <body>
+    <svg class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-dash" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="9" rx="1.5" />
+        <rect x="14" y="3" width="7" height="5" rx="1.5" />
+        <rect x="14" y="12" width="7" height="9" rx="1.5" />
+        <rect x="3" y="16" width="7" height="5" rx="1.5" />
+      </symbol>
+      <symbol id="i-users" viewBox="0 0 24 24">
+        <circle cx="9" cy="8" r="3.5" />
+        <path
+          d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"
+        />
+      </symbol>
+      <symbol id="i-user" viewBox="0 0 24 24">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21a8 8 0 0 1 16 0" />
+      </symbol>
+      <symbol id="i-award" viewBox="0 0 24 24">
+        <circle cx="12" cy="9" r="6" />
+        <path d="m8.5 14 -1.5 8 5-3 5 3-1.5-8" />
+      </symbol>
+      <symbol id="i-doc" viewBox="0 0 24 24">
+        <path
+          d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"
+        />
+        <path d="M14 3v5h5M9 13h6M9 17h6" />
+      </symbol>
+      <symbol id="i-warn" viewBox="0 0 24 24">
+        <path
+          d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"
+        />
+        <path d="M14 3v5h5M12 12v3M12 18h.01" />
+      </symbol>
+      <symbol id="i-building" viewBox="0 0 24 24">
+        <path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6" />
+      </symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24">
+        <path d="M4 4h16v12H8l-4 4V4Z" />
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24">
+        <path d="M4 20V10M10 20V4M16 20v-8M22 20H2" />
+      </symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24">
+        <rect x="4" y="11" width="16" height="10" rx="2" />
+        <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+      </symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24">
+        <path
+          d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"
+        />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="m5 12 5 5 9-10" />
+      </symbol>
+      <symbol id="i-list" viewBox="0 0 24 24">
+        <path
+          d="M9 6h12M9 12h12M9 18h12M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"
+        />
+      </symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24">
+        <path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8" />
+        <path d="M10 20a2 2 0 0 0 4 0" />
+      </symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="i-down" viewBox="0 0 24 24">
+        <path d="M12 3v12m0 0-4-4m4 4 4-4M4 19h16" />
+      </symbol>
+      <symbol id="i-up" viewBox="0 0 24 24">
+        <path d="M12 15V3m0 0L8 7m4-4 4 4M4 19h16" />
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24">
+        <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+      </symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24">
+        <path d="M3 6h18M3 12h18M3 18h18" />
+      </symbol>
+      <symbol id="i-book" viewBox="0 0 24 24">
+        <path d="M4 5h12a3 3 0 0 1 3 3v11H7a3 3 0 0 1-3-3V5Z" />
+        <path d="M8 9h7" />
+      </symbol>
+      <symbol id="i-cap" viewBox="0 0 24 24">
+        <path d="M12 4 2 9l10 5 10-5-10-5Z" />
+        <path d="M6 11.5V16c0 1.4 2.7 3 6 3s6-1.6 6-3v-4.5M22 9v6" />
+      </symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24">
+        <path d="M6 4v16M12 4v16M18 4v16M4 14h4M10 8h4M16 15h4" />
+      </symbol>
+    </svg>
+
     <main class="login-screen" id="login-screen">
       <form class="login-card" id="login-form">
-        <div class="brand-mark">T</div>
-        <p class="eyebrow">TEACHERHUB · LOCAL</p>
-        <h1>Đăng nhập</h1>
-        <p class="page-subtitle">Dành cho người dùng được quản trị viên cấp tài khoản.</p>
-        <label class="form-field"><span>Tên tài khoản</span><input name="username" required autocomplete="username"></label>
-        <label class="form-field"><span>Mật khẩu</span><input name="password" type="password" required autocomplete="current-password"></label>
+        <img
+          class="login-logo"
+          src="/static/neu-logo.png"
+          alt="Logo Đại học Kinh tế Quốc dân"
+        />
+        <p class="eyebrow">ĐẠI HỌC KINH TẾ QUỐC DÂN</p>
+        <h1>Hệ thống Quản lý Giảng viên</h1>
+        <p class="page-subtitle">
+          Đăng nhập bằng tài khoản do quản trị viên cấp.
+        </p>
+        <label class="form-field"
+          ><span>Tên tài khoản</span
+          ><input name="username" required autocomplete="username"
+        /></label>
+        <label class="form-field"
+          ><span>Mật khẩu</span
+          ><input
+            name="password"
+            type="password"
+            required
+            autocomplete="current-password"
+        /></label>
         <div class="form-error hidden" id="login-error" role="alert"></div>
         <button class="button button-primary" type="submit">Đăng nhập</button>
-        <p class="security-copy">Bản thử nghiệm local. Chỉ dùng dữ liệu giả lập.</p>
+        <p class="security-copy">
+          Cần hỗ trợ tài khoản? Liên hệ Phòng Tổ chức Cán bộ.
+        </p>
       </form>
     </main>
 
     <div class="app-shell hidden" id="app-shell">
       <aside class="sidebar" id="sidebar">
-        <a class="brand" href="/" aria-label="Trang tổng quan">
-          <span class="brand-mark" aria-hidden="true">T</span>
-          <span class="brand-copy"><strong>Teacher<span>Hub</span></strong><small>QUẢN LÝ GIẢNG VIÊN</small></span>
-        </a>
-        <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
-        <nav class="main-nav" aria-label="Điều hướng chính">
-          <button class="nav-link" data-view="overview" type="button">Tổng quan</button>
-          <button class="nav-link" data-view="teachers" data-roles="hr" type="button">Hồ sơ giảng viên</button>
-          <button class="nav-link" data-view="departments" data-roles="hr,manager" type="button">Khoa &amp; bộ môn</button>
-          <button class="nav-link" data-view="qualifications" data-roles="hr" type="button">Bằng cấp &amp; chứng chỉ</button>
-          <button class="nav-link" data-view="contracts" data-roles="hr" type="button">Hợp đồng</button>
-          <button class="nav-link" data-view="history" data-roles="hr" type="button">Quá trình công tác</button>
-          <button class="nav-link" data-view="documents" data-roles="hr" type="button">Tài liệu minh chứng</button>
-          <button class="nav-link" data-view="changes" data-roles="hr,manager" type="button">Yêu cầu thay đổi</button>
-          <button class="nav-link" data-view="checklist" data-roles="hr" type="button">Checklist hồ sơ</button>
-          <button class="nav-link" data-view="reports" data-roles="hr,manager" type="button">Báo cáo</button>
-          <button class="nav-link" data-view="accounts" data-roles="admin" type="button">Quản trị hệ thống</button>
-          <button class="nav-link" data-view="audit" data-roles="admin" type="button">Nhật ký hoạt động</button>
-        </nav>
-        <div class="sidebar-bottom">
-          <div class="sidebar-help"><strong>Môi trường thử nghiệm</strong><p>Chỉ truy cập trên máy này. Không dùng hồ sơ thật.</p></div>
-          <div class="profile">
-            <div class="avatar" id="profile-initials">U</div>
-            <div class="profile-copy"><strong id="profile-name">Người dùng</strong><small id="profile-role">Vai trò</small></div>
-            <button class="text-button" id="password-button" type="button">Đổi mật khẩu</button>
-            <button class="text-button" id="logout-button" type="button">Thoát</button>
+        <a class="brand" href="/" aria-label="Trang tổng quan"
+          ><img src="/static/neu-logo.png" alt="Logo Đại học Kinh tế Quốc dân"
+        /></a>
+        <div class="profile">
+          <div class="avatar" id="profile-initials">U</div>
+          <div class="profile-copy">
+            <strong id="profile-name">Người dùng</strong
+            ><small id="profile-role">Vai trò</small>
           </div>
         </div>
+        <nav class="main-nav" aria-label="Điều hướng chính">
+          <div class="nav-label">TRANG CHỦ</div>
+          <button class="nav-link" data-view="overview" type="button">
+            <svg class="ico"><use href="#i-dash" /></svg><span>Tổng quan</span>
+          </button>
+          <div class="nav-label" data-roles="hr">HỒ SƠ NHÂN SỰ</div>
+          <button
+            class="nav-link"
+            data-view="teachers"
+            data-roles="hr"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-users" /></svg>
+            <span>Hồ sơ giảng viên</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="qualifications"
+            data-roles="hr"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-award" /></svg>
+            <span>Bằng cấp &amp; chứng chỉ</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="contracts"
+            data-roles="hr"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-doc" /></svg><span>Hợp đồng</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="history"
+            data-roles="hr"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-clock" /></svg>
+            <span>Quá trình công tác</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="documents"
+            data-roles="hr"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-folder" /></svg>
+            <span>Tài liệu minh chứng</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="checklist"
+            data-roles="hr"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-list" /></svg>
+            <span>Checklist hồ sơ</span>
+          </button>
+          <div class="nav-label" data-roles="hr,manager">
+            QUẢN LÝ &amp; BÁO CÁO
+          </div>
+          <button
+            class="nav-link"
+            data-view="departments"
+            data-roles="hr,manager"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-building" /></svg>
+            <span>Khoa &amp; bộ môn</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="changes"
+            data-roles="hr,manager"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-chat" /></svg>
+            <span>Yêu cầu thay đổi</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="reports"
+            data-roles="hr,manager"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-chart" /></svg>
+            <span>Báo cáo thống kê</span>
+          </button>
+          <div class="nav-label" data-roles="admin">HỆ THỐNG</div>
+          <button
+            class="nav-link"
+            data-view="accounts"
+            data-roles="admin"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-lock" /></svg>
+            <span>Quản trị hệ thống</span>
+          </button>
+          <button
+            class="nav-link"
+            data-view="audit"
+            data-roles="admin"
+            type="button"
+          >
+            <svg class="ico"><use href="#i-clock" /></svg>
+            <span>Nhật ký hoạt động</span>
+          </button>
+        </nav>
       </aside>
+      <div class="scrim" id="scrim"></div>
 
       <main class="main-area">
         <header class="topbar">
-          <button class="mobile-menu" id="mobile-menu" type="button" aria-label="Mở menu">☰</button>
-          <div class="breadcrumb"><span>Không gian làm việc</span><span class="crumb-separator">/</span><strong id="breadcrumb-current">Tổng quan</strong></div>
-          <div class="topbar-actions"><span class="environment-tag"><i></i> Local · SQLite</span><span class="topbar-date" id="today-date"></span></div>
+          <button
+            class="mobile-menu"
+            id="mobile-menu"
+            type="button"
+            aria-label="Mở menu"
+          >
+            <svg class="ico"><use href="#i-menu" /></svg>
+          </button>
+          <div class="topbar-title">
+            <strong>Hệ thống Quản lý Giảng viên</strong
+            ><span>ĐẠI HỌC KINH TẾ QUỐC DÂN</span>
+          </div>
+          <div class="topbar-actions">
+            <span class="topbar-date" id="today-date"></span>
+            <div class="menu-wrap">
+              <button
+                class="top-icon"
+                id="notif-button"
+                type="button"
+                aria-label="Thông báo"
+                aria-expanded="false"
+              >
+                <svg class="ico"><use href="#i-bell" /></svg>
+                <span class="notif-badge hidden" id="notif-count">0</span>
+              </button>
+              <div class="dropdown notif-panel hidden" id="notif-panel">
+                <div class="dropdown-head">
+                  <strong>Thông báo</strong>      
+                  <button class="text-button" id="notif-read" type="button">
+                    Đánh dấu đã đọc
+                  </button>
+                </div>
+                <div id="notif-list"></div>
+              </div>
+            </div>
+            <div class="menu-wrap">
+              <button
+                class="top-icon user-icon"
+                id="user-button"
+                type="button"
+                aria-label="Tài khoản"
+                aria-expanded="false"
+              >
+                <svg class="ico"><use href="#i-user" /></svg>
+              </button>
+              <div class="dropdown user-panel hidden" id="user-panel">
+                <button class="menu-item" id="password-button" type="button">
+                  <svg class="ico"><use href="#i-lock" /></svg>Đổi mật khẩu
+                </button>
+                <button class="menu-item" id="logout-button" type="button">
+                  <svg class="ico"><use href="#i-up" /></svg>Đăng xuất
+                </button>
+              </div>
+            </div>
+          </div>
         </header>
         <div class="content">
-          <div class="security-notice" role="note"><span aria-hidden="true">!</span><p><strong>Bản thử nghiệm:</strong> chạy trên localhost với dữ liệu giả lập; chưa được phê duyệt để lưu hồ sơ nhân sự thật.</p></div>
+          <div class="breadcrumb">
+            <span>Trang chủ</span><span class="crumb-separator">/</span
+            ><strong id="breadcrumb-current">Tổng quan</strong>
+          </div>
+
           <section class="view-section" id="view-overview">
-            <div class="page-heading"><div><div class="eyebrow">BẢNG ĐIỀU KHIỂN</div><h1>Tổng quan</h1><p class="page-subtitle">Số liệu được tổng hợp từ dữ liệu hiện có.</p></div></div>
+            <div class="page-heading">
+              <div class="title-row">
+                <i class="title-icon">
+                  <svg class="ico"><use href="#i-chev" /></svg>
+                </i>
+                <div>
+                  <h1>Tổng quan</h1>
+                  <p class="page-subtitle">
+                    Số liệu được tổng hợp từ dữ liệu hiện có.
+                  </p>
+                </div>
+              </div>
+            </div>
             <div class="stats-grid" id="summary-cards"></div>
-            <section class="panel workspace-panel"><div class="panel-heading"><div><h2>Cảnh báo hợp đồng</h2><p>Hết hạn hoặc sắp hết hạn theo cấu hình.</p></div></div><div class="table-wrap"><table><thead><tr><th>Mã hợp đồng</th><th>Giảng viên</th><th>Ngày hết hạn</th><th>Ngày còn lại</th><th>Trạng thái</th></tr></thead><tbody id="contract-alert-rows"></tbody></table></div></section>
+            <div class="chart-grid" id="overview-charts"></div>
+            <section class="panel" id="contract-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Cảnh báo hợp đồng</h2>
+                  <p>Hết hạn hoặc sắp hết hạn theo cấu hình.</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Mã hợp đồng</th>
+                      <th>Giảng viên</th>
+                      <th>Ngày hết hạn</th>
+                      <th>Ngày còn lại</th>
+                      <th>Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody id="contract-alert-rows"></tbody>
+                </table>
+              </div>
+              <div class="empty-state hidden" id="contract-empty"></div>
+            </section>
+            <div id="overview-extra"></div>
           </section>
+
           <section class="view-section hidden" id="view-workspace">
-            <div class="page-heading"><div><div class="eyebrow">QUẢN LÝ NGHIỆP VỤ</div><h1 id="workspace-title"></h1><p class="page-subtitle" id="workspace-description"></p></div><div id="workspace-actions"></div></div>
+            <div class="page-heading">
+              <div class="title-row">
+                <i class="title-icon">
+                  <svg class="ico"><use href="#i-chev" /></svg>
+                </i>
+                <div>
+                  <h1 id="workspace-title"></h1>
+                  <p class="page-subtitle" id="workspace-description"></p>
+                </div>
+              </div>
+              <div class="workspace-actions" id="workspace-actions"></div>
+            </div>
             <section class="panel workspace-panel">
               <div class="workspace-filters" id="workspace-filters"></div>
               <div id="workspace-form-region"></div>
-              <div class="table-wrap"><table><thead id="workspace-head"></thead><tbody id="workspace-rows"></tbody></table></div>
-              <div class="empty-state hidden" id="workspace-empty">Chưa có dữ liệu phù hợp.</div>
+              <div class="table-wrap">
+                <table>
+                  <thead id="workspace-head"></thead>
+                  <tbody id="workspace-rows"></tbody>
+                </table>
+              </div>
+              <div class="empty-state hidden" id="workspace-empty">
+                Không có dữ liệu.
+              </div>
+              <div class="pager hidden" id="workspace-pager"></div>
             </section>
           </section>
-          <footer class="footer"><span>TeacherHub <span id="footer-year"></span></span><span>Chạy local · dữ liệu giả lập</span></footer>
+
+          <section class="view-section hidden" id="view-detail">
+            <div class="page-heading">
+              <div class="title-row">
+                <i class="title-icon">
+                  <svg class="ico"><use href="#i-chev" /></svg>
+                </i>
+                <div>
+                  <h1 id="detail-title">Hồ sơ giảng viên</h1>
+                  <p class="page-subtitle" id="detail-subtitle"></p>
+                </div>
+              </div>
+              <div class="workspace-actions" id="detail-actions"></div>
+            </div>
+            <section class="panel">
+              <div class="tabs" id="detail-tabs" role="tablist"></div>
+              <div class="tab-body" id="detail-body"></div>
+            </section>
+          </section>
+
+          <footer class="footer">
+            <span>© 
+              <span id="footer-year"></span> 
+              Hệ thống Quản lý Giảng viên · Phòng Tổ chức Cán bộ
+            </span>
+              <span>Hỗ trợ: tccb@truong.edu.vn</span>
+          </footer>
         </div>
       </main>
     </div>
+    <button
+      class="fab hidden"
+      id="theme-fab"
+      type="button"
+      aria-label="Đổi giao diện sáng/tối"
+      title="Đổi giao diện sáng/tối"
+    >
+      <svg class="ico"><use href="#i-sliders" /></svg>
+    </button>
 
     <div class="modal-backdrop hidden" id="modal-backdrop" role="presentation">
-      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-        <div class="modal-header"><div><div class="eyebrow" id="modal-eyebrow">HỒ SƠ NHÂN SỰ</div><h2 id="modal-title">Thêm giảng viên</h2></div><button class="icon-button" id="modal-close" type="button" aria-label="Đóng">×</button></div>
+      <section
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow" id="modal-eyebrow">HỒ SƠ NHÂN SỰ</div>
+            <h2 id="modal-title">Thêm giảng viên</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="modal-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
         <form id="teacher-form">
-          <input type="hidden" name="teacher_id">
+          <input type="hidden" name="teacher_id" />
           <div class="form-grid">
-            <label class="form-field"><span>Mã giảng viên <b>*</b></span><input name="employee_code" required maxlength="40"></label>
-            <label class="form-field"><span>Họ và tên <b>*</b></span><input name="full_name" required maxlength="160"></label>
-            <label class="form-field"><span>Đơn vị công tác <b>*</b></span><select name="department_id" required></select></label>
-            <label class="form-field"><span>Trạng thái</span><select name="employment_status"><option value="active">Đang công tác</option><option value="paused">Tạm ngừng</option><option value="ended">Đã kết thúc</option></select></label>
-            <label class="form-field"><span>Ngày sinh</span><input name="date_of_birth" type="date"></label>
-            <label class="form-field"><span>Giới tính</span><input name="gender" maxlength="40"></label>
-            <label class="form-field"><span>Email</span><input name="email" type="email" maxlength="254"></label>
-            <label class="form-field"><span>Số điện thoại</span><input name="phone" type="tel" maxlength="30"></label>
-            <label class="form-field"><span>Trình độ</span><input name="academic_degree" maxlength="80"></label>
-            <label class="form-field"><span>Chức danh</span><input name="academic_title" maxlength="80"></label>
-            <label class="form-field form-field-wide"><span>Địa chỉ liên hệ</span><input name="address" maxlength="300"></label>
+            <label class="form-field"
+              ><span>Mã giảng viên <b>*</b></span
+              ><input name="employee_code" required maxlength="40"
+            /></label>
+            <label class="form-field"
+              ><span>Họ và tên <b>*</b></span
+              ><input name="full_name" required maxlength="160"
+            /></label>
+            <label class="form-field"
+              ><span>Đơn vị công tác <b>*</b></span
+              ><select name="department_id" required></select
+            ></label>
+            <label class="form-field"
+              ><span>Trạng thái</span
+              ><select name="employment_status">
+                <option value="active">Đang công tác</option>
+                <option value="paused">Tạm ngừng</option>
+                <option value="ended">Đã kết thúc</option>
+              </select></label
+            >
+            <label class="form-field"
+              ><span>Ngày sinh</span><input name="date_of_birth" type="date"
+            /></label>
+            <label class="form-field"
+              ><span>Giới tính</span><input name="gender" maxlength="40"
+            /></label>
+            <label class="form-field"
+              ><span>Email</span
+              ><input name="email" type="email" maxlength="254"
+            /></label>
+            <label class="form-field"
+              ><span>Số điện thoại</span
+              ><input name="phone" type="tel" maxlength="30"
+            /></label>
+            <label class="form-field"
+              ><span>Trình độ</span
+              ><input name="academic_degree" maxlength="80"
+            /></label>
+            <label class="form-field"
+              ><span>Chức danh</span
+              ><input name="academic_title" maxlength="80"
+            /></label>
+            <label class="form-field form-field-wide"
+              ><span>Địa chỉ liên hệ</span
+              ><input name="address" maxlength="300"
+            /></label>
           </div>
           <div class="form-error hidden" id="form-error" role="alert"></div>
-          <div class="modal-actions"><button class="button button-secondary" id="modal-cancel" type="button">Hủy</button><button class="button button-primary" id="teacher-submit" type="submit">Lưu hồ sơ</button></div>
+          <div class="modal-actions">
+            <button
+              class="button button-secondary"
+              id="modal-cancel"
+              type="button"
+            >
+              Hủy</button
+            ><button
+              class="button button-primary"
+              id="teacher-submit"
+              type="submit"
+            >
+              Lưu hồ sơ
+            </button>
+          </div>
         </form>
       </section>
     </div>
-    <div class="modal-backdrop hidden" id="department-backdrop" role="presentation">
-      <section class="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="department-modal-title">
-        <div class="modal-header"><div><div class="eyebrow">CƠ CẤU TỔ CHỨC</div><h2 id="department-modal-title">Thêm đơn vị</h2></div><button class="icon-button" id="department-modal-close" type="button" aria-label="Đóng">×</button></div>
+    <div
+      class="modal-backdrop hidden"
+      id="department-backdrop"
+      role="presentation"
+    >
+      <section
+        class="modal modal-compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="department-modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">CƠ CẤU TỔ CHỨC</div>
+            <h2 id="department-modal-title">Thêm đơn vị</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="department-modal-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
         <form id="department-form">
-          <input type="hidden" name="department_id">
-          <label class="form-field"><span>Mã đơn vị <b>*</b></span><input name="code" required maxlength="30"></label>
-          <label class="form-field"><span>Tên đơn vị <b>*</b></span><input name="name" required maxlength="120"></label>
-          <label class="form-field"><span>Đơn vị cha</span><select name="parent_id"><option value="">Không có</option></select></label>
-          <label class="form-field"><span>Mô tả</span><textarea name="description" rows="3" maxlength="500"></textarea></label>
-          <div class="form-error hidden" id="department-form-error" role="alert"></div>
-          <div class="modal-actions"><button class="button button-secondary" id="department-modal-cancel" type="button">Hủy</button><button class="button button-primary" id="department-submit" type="submit">Lưu đơn vị</button></div>
+          <input type="hidden" name="department_id" />
+          <label class="form-field"
+            ><span>Mã đơn vị <b>*</b></span
+            ><input name="code" required maxlength="30"
+          /></label>
+          <label class="form-field"
+            ><span>Tên đơn vị <b>*</b></span
+            ><input name="name" required maxlength="120"
+          /></label>
+          <label class="form-field"
+            ><span>Đơn vị cha</span
+            ><select name="parent_id">
+              <option value="">Không có</option>
+            </select></label
+          >
+          <label class="form-field"
+            ><span>Mô tả</span
+            ><textarea name="description" rows="3" maxlength="500"></textarea>
+          </label>
+          <div
+            class="form-error hidden"
+            id="department-form-error"
+            role="alert"
+          ></div>
+          <div class="modal-actions">
+            <button
+              class="button button-secondary"
+              id="department-modal-cancel"
+              type="button"
+            >
+              Hủy</button
+            ><button
+              class="button button-primary"
+              id="department-submit"
+              type="submit"
+            >
+              Lưu đơn vị
+            </button>
+          </div>
         </form>
       </section>
     </div>
-    <div class="modal-backdrop hidden" id="account-backdrop" role="presentation">
-      <section class="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
-        <div class="modal-header"><div><div class="eyebrow">QUẢN TRỊ HỆ THỐNG</div><h2 id="account-modal-title">Chỉnh sửa tài khoản</h2></div><button class="icon-button" id="account-modal-close" type="button" aria-label="Đóng">×</button></div>
+    <div
+      class="modal-backdrop hidden"
+      id="account-backdrop"
+      role="presentation"
+    >
+      <section
+        class="modal modal-compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">QUẢN TRỊ HỆ THỐNG</div>
+            <h2 id="account-modal-title">Chỉnh sửa tài khoản</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="account-modal-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
         <form id="account-form">
-          <input type="hidden" name="user_id">
-          <label class="form-field"><span>Tên tài khoản</span><input name="username" readonly></label>
-          <label class="form-field"><span>Họ tên <b>*</b></span><input name="full_name" required maxlength="160"></label>
-          <label class="form-field"><span>Vai trò <b>*</b></span><select name="role" required><option value="hr">Nhân viên nhân sự</option><option value="manager">Người quản lý</option><option value="admin">Quản trị viên</option></select></label>
-          <div class="form-error hidden" id="account-form-error" role="alert"></div>
-          <div class="modal-actions"><button class="button button-secondary" id="account-modal-cancel" type="button">Hủy</button><button class="button button-primary" type="submit">Lưu thay đổi</button></div>
+          <input type="hidden" name="user_id" />
+          <label class="form-field"
+            ><span>Tên tài khoản</span><input name="username" readonly
+          /></label>
+          <label class="form-field"
+            ><span>Họ tên <b>*</b></span
+            ><input name="full_name" required maxlength="160"
+          /></label>
+          <label class="form-field"
+            ><span>Vai trò <b>*</b></span
+            ><select name="role" required>
+              <option value="hr">Nhân viên nhân sự</option>
+              <option value="manager">Người quản lý</option>
+              <option value="admin">Quản trị viên</option>
+            </select></label
+          >
+          <div
+            class="form-error hidden"
+            id="account-form-error"
+            role="alert"
+          ></div>
+          <div class="modal-actions">
+            <button
+              class="button button-secondary"
+              id="account-modal-cancel"
+              type="button"
+            >
+              Hủy</button
+            ><button class="button button-primary" type="submit">
+              Lưu thay đổi
+            </button>
+          </div>
         </form>
       </section>
     </div>
-    <div class="modal-backdrop hidden" id="password-backdrop" role="presentation">
-      <section class="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
-        <div class="modal-header"><div><div class="eyebrow">BẢO MẬT TÀI KHOẢN</div><h2 id="password-modal-title">Đổi mật khẩu</h2></div><button class="icon-button" id="password-close" type="button" aria-label="Đóng">×</button></div>
+    <div
+      class="modal-backdrop hidden"
+      id="password-backdrop"
+      role="presentation"
+    >
+      <section
+        class="modal modal-compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="password-modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">BẢO MẬT TÀI KHOẢN</div>
+            <h2 id="password-modal-title">Đổi mật khẩu</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="password-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
         <form id="password-form">
-          <label class="form-field"><span>Mật khẩu hiện tại</span><input name="current_password" type="password" required autocomplete="current-password"></label>
-          <label class="form-field"><span>Mật khẩu mới (ít nhất 12 ký tự)</span><input name="new_password" type="password" minlength="12" required autocomplete="new-password"></label>
+          <label class="form-field"
+            ><span>Mật khẩu hiện tại</span
+            ><input
+              name="current_password"
+              type="password"
+              required
+              autocomplete="current-password"
+          /></label>
+          <label class="form-field"
+            ><span>Mật khẩu mới (ít nhất 12 ký tự)</span
+            ><input
+              name="new_password"
+              type="password"
+              minlength="12"
+              required
+              autocomplete="new-password"
+          /></label>
           <div class="form-error hidden" id="password-error" role="alert"></div>
-          <div class="modal-actions"><button class="button button-secondary" id="password-cancel" type="button">Hủy</button><button class="button button-primary" type="submit">Đổi mật khẩu</button></div>
+          <div class="modal-actions">
+            <button
+              class="button button-secondary"
+              id="password-cancel"
+              type="button"
+            >
+              Hủy</button
+            ><button class="button button-primary" type="submit">
+              Đổi mật khẩu
+            </button>
+          </div>
         </form>
       </section>
     </div>
-    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <div class="modal-backdrop hidden" id="reset-backdrop" role="presentation">
+      <section
+        class="modal modal-compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reset-modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">QUẢN TRỊ HỆ THỐNG</div>
+            <h2 id="reset-modal-title">Đặt lại mật khẩu</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="reset-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
+        <form id="reset-form">
+          <input type="hidden" name="user_id" />
+          <p class="page-subtitle" id="reset-note"></p>
+          <label class="form-field"
+            ><span>Mật khẩu mới (ít nhất 12 ký tự)</span
+            ><input
+              name="new_password"
+              type="password"
+              minlength="12"
+              required
+              autocomplete="new-password"
+          /></label>
+          <div class="form-error hidden" id="reset-error" role="alert"></div>
+          <div class="modal-actions">
+            <button
+              class="button button-secondary"
+              id="reset-cancel"
+              type="button"
+            >
+              Hủy</button
+            ><button class="button button-primary" type="submit">
+              Đặt lại mật khẩu
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+    <div class="modal-backdrop hidden" id="import-backdrop" role="presentation">
+      <section
+        class="modal modal-compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="import-modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">HỒ SƠ NHÂN SỰ</div>
+            <h2 id="import-modal-title">Nhập giảng viên từ Excel</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="import-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
+        <form id="import-form">
+          <p class="page-subtitle">
+            Dùng tệp mẫu để nhập tối đa 500 dòng mỗi lần. Cột
+            <strong>Mã đơn vị</strong> phải trùng mã đơn vị đang hoạt động.
+          </p>
+          <button
+            class="button button-secondary"
+            type="button"
+            data-action="download-template"
+          >
+            <svg class="ico"><use href="#i-down" /></svg>Tải tệp mẫu
+          </button>
+          <label class="form-field"
+            ><span>Chọn tệp .xlsx</span
+            ><input name="file" type="file" accept=".xlsx" required
+          /></label>
+          <div class="form-error hidden" id="import-error" role="alert"></div>
+          <div class="import-result hidden" id="import-result"></div>
+          <div class="modal-actions">
+            <button
+              class="button button-secondary"
+              id="import-cancel"
+              type="button"
+            >
+              Đóng</button
+            ><button class="button button-primary" type="submit">
+              Nhập dữ liệu
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+    <div
+      class="modal-backdrop hidden"
+      id="confirm-backdrop"
+      role="presentation"
+    >
+      <section
+        class="modal modal-compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">XÁC NHẬN</div>
+            <h2 id="confirm-title">Xác nhận thao tác</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="confirm-close"
+            type="button"
+            aria-label="Đóng"
+          >
+            ×
+          </button>
+        </div>
+        <p class="confirm-message" id="confirm-message"></p>
+        <div class="modal-actions">
+          <button
+            class="button button-secondary"
+            id="confirm-cancel"
+            type="button"
+          >
+            Hủy</button
+          ><button class="button button-danger" id="confirm-ok" type="button">
+            Xóa
+          </button>
+        </div>
+      </section>
+    </div>
+    <div
+      class="toast-region"
+      id="toast-region"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
   </body>
 </html>

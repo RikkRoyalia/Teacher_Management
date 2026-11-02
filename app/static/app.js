@@ -7,12 +7,18 @@ const state = {
   users: [],
   selectedTeacherId: "",
   contractWarningDays: 30,
+  table: { rows: [], size: 10, page: 1 },
+  notifications: [],
+  notifTimer: null,
+  detailTab: "info",
+  teacherQuery: "",
 };
 
 const viewTitles = {
   overview: "Tổng quan",
   teachers: "Hồ sơ giảng viên",
   teacherChecklist: "Rà soát checklist hồ sơ",
+  teacherDetail: "Chi tiết hồ sơ giảng viên",
   departments: "Khoa & bộ môn",
   qualifications: "Bằng cấp & chứng chỉ",
   contracts: "Hợp đồng lao động",
@@ -25,7 +31,11 @@ const viewTitles = {
   audit: "Nhật ký hoạt động",
 };
 
-const roleLabels = { admin: "Quản trị viên", hr: "Nhân viên nhân sự", manager: "Người quản lý" };
+const roleLabels = {
+  admin: "Quản trị viên",
+  hr: "Nhân viên nhân sự",
+  manager: "Người quản lý",
+};
 const statusLabels = {
   active: "Đang công tác",
   paused: "Tạm ngừng",
@@ -82,7 +92,10 @@ function addPasswordToggle(input) {
     const showPassword = input.type === "password";
     input.type = showPassword ? "text" : "password";
     toggle.textContent = showPassword ? "Ẩn" : "Hiện";
-    toggle.setAttribute("aria-label", `${showPassword ? "Ẩn" : "Hiện"} mật khẩu`);
+    toggle.setAttribute(
+      "aria-label",
+      `${showPassword ? "Ẩn" : "Hiện"} mật khẩu`,
+    );
     toggle.setAttribute("aria-pressed", String(showPassword));
   });
 
@@ -94,7 +107,9 @@ function addPasswordToggle(input) {
 function resetPasswordToggles(form) {
   $$('[data-password-toggle="true"]', form).forEach((input) => {
     if (input.type === "text") input.type = "password";
-    const toggle = input.closest(".password-input-wrap").querySelector("button");
+    const toggle = input
+      .closest(".password-input-wrap")
+      .querySelector("button");
     toggle.textContent = "Hiện";
     toggle.setAttribute("aria-label", "Hiện mật khẩu");
     toggle.setAttribute("aria-pressed", "false");
@@ -102,11 +117,21 @@ function resetPasswordToggles(form) {
 }
 
 function initials(name = "") {
-  return name.trim().split(/\s+/).slice(-2).map((part) => Array.from(part)[0] || "").join("").toLocaleUpperCase("vi");
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(-2)
+    .map((part) => Array.from(part)[0] || "")
+    .join("")
+    .toLocaleUpperCase("vi");
 }
 
 function showToast(message, isError = false) {
-  const toast = makeElement("div", `toast${isError ? " toast-error" : ""}`, message);
+  const toast = makeElement(
+    "div",
+    `toast${isError ? " toast-error" : ""}`,
+    message,
+  );
   $("#toast-region").append(toast);
   window.setTimeout(() => toast.remove(), 4500);
 }
@@ -123,6 +148,8 @@ function clearError(target) {
 
 function showLogin() {
   state.user = null;
+  stopNotifications();
+  $("#theme-fab").classList.add("hidden");
   state.csrfToken = "";
   $("#app-shell").classList.add("hidden");
   $("#login-screen").classList.remove("hidden");
@@ -136,10 +163,15 @@ function showApp(user) {
   $("#profile-name").textContent = user.full_name;
   $("#profile-role").textContent = roleLabels[user.role] || user.role;
   $("#profile-initials").textContent = initials(user.full_name);
-  $$(".nav-link").forEach((link) => {
+  $$("[data-roles]").forEach((link) => {
     const roles = (link.dataset.roles || "").split(",").filter(Boolean);
-    link.classList.toggle("hidden", roles.length > 0 && !roles.includes(user.role));
+    link.classList.toggle(
+      "hidden",
+      roles.length > 0 && !roles.includes(user.role),
+    );
   });
+  $("#theme-fab").classList.remove("hidden");
+  startNotifications();
   navigate("overview");
 }
 
@@ -154,21 +186,28 @@ async function api(path, options = {}) {
   if (!["GET", "HEAD", "OPTIONS"].includes(method) && state.csrfToken) {
     headers.set("X-CSRF-Token", state.csrfToken);
   }
-  const response = await fetch(path, { ...options, method, headers, credentials: "same-origin" });
+  const response = await fetch(path, {
+    ...options,
+    method,
+    headers,
+    credentials: "same-origin",
+  });
   if (response.status === 401 && state.user) showLogin();
   if (!response.ok) {
     let message = `Yêu cầu không thành công (${response.status}).`;
     try {
       const body = await response.json();
       if (typeof body.detail === "string") message = body.detail;
-      else if (Array.isArray(body.detail)) message = body.detail.map((item) => item.msg).join(" ");
+      else if (Array.isArray(body.detail))
+        message = body.detail.map((item) => item.msg).join(" ");
     } catch {
       message = `Yêu cầu không thành công (${response.status}).`;
     }
     throw new Error(message);
   }
   if (response.status === 204) return null;
-  if (response.headers.get("content-type")?.includes("application/json")) return response.json();
+  if (response.headers.get("content-type")?.includes("application/json"))
+    return response.json();
   return response;
 }
 
@@ -180,7 +219,9 @@ async function refreshData() {
   }
   const [departments, teachers] = await Promise.all([
     api("/departments?include_inactive=true").catch(() => []),
-    state.user.role === "hr" ? api("/teachers").catch(() => []) : Promise.resolve([]),
+    state.user.role === "hr"
+      ? api("/teachers").catch(() => [])
+      : Promise.resolve([]),
   ]);
   state.departments = departments;
   state.teachers = teachers;
@@ -192,9 +233,21 @@ function navigate(view) {
   $$(".view-section").forEach((section) => section.classList.add("hidden"));
   $("#breadcrumb-current").textContent = viewTitles[view];
   $("#sidebar").classList.remove("open");
+  const activeView = ["teacherDetail", "teacherChecklist"].includes(view)
+    ? "teachers"
+    : view;
+  $$(".nav-link").forEach((link) =>
+    link.classList.toggle("active", link.dataset.view === activeView),
+  );
+  window.scrollTo({ top: 0 });
   if (view === "overview") {
     $("#view-overview").classList.remove("hidden");
     renderOverview();
+    return;
+  }
+  if (view === "teacherDetail") {
+    $("#view-detail").classList.remove("hidden");
+    renderWorkspace().catch((error) => showToast(error.message, true));
     return;
   }
   $("#view-workspace").classList.remove("hidden");
@@ -206,83 +259,434 @@ function navigate(view) {
 function workspaceDescription(view) {
   const descriptions = {
     teachers: "Tìm kiếm, lọc và quản lý hồ sơ giảng viên.",
-    teacherChecklist: "HR rà soát điều kiện áp dụng theo từng giảng viên; chỉ mục được đánh dấu bắt buộc mới ảnh hưởng trạng thái đầy đủ.",
-    departments: "Quản lý cây đơn vị; đơn vị đã tham chiếu được lưu trữ thay vì xóa.",
-    qualifications: "Thông tin bằng cấp, chứng chỉ và chuyên môn của giảng viên.",
-    contracts: "Theo dõi hợp đồng; cảnh báo không tự gia hạn hay đổi trạng thái.",
+    teacherChecklist:
+      "HR rà soát điều kiện áp dụng theo từng giảng viên; chỉ mục được đánh dấu bắt buộc mới ảnh hưởng trạng thái đầy đủ.",
+    departments:
+      "Quản lý cây đơn vị; đơn vị đã tham chiếu được lưu trữ thay vì xóa.",
+    qualifications:
+      "Thông tin bằng cấp, chứng chỉ và chuyên môn của giảng viên.",
+    contracts:
+      "Theo dõi hợp đồng; cảnh báo không tự gia hạn hay đổi trạng thái.",
     history: "Lịch sử công tác được giữ lại qua các lần thay đổi đã duyệt.",
     documents: "Tệp được lưu riêng, chỉ người có quyền nhân sự mới tải xuống.",
     changes: "Thay đổi quan trọng chỉ cập nhật hồ sơ chính thức sau khi duyệt.",
-    checklist: "Checklist có thể cấu hình; tài liệu nhạy cảm không bắt buộc mặc định.",
-    reports: "Số liệu thể hiện điều kiện lọc; vai trò quản lý chỉ xem tổng hợp.",
-    accounts: "Quản lý tài khoản và vai trò; tài khoản bị khóa được giữ lại để bảo toàn lịch sử và nhật ký.",
+    checklist:
+      "Checklist có thể cấu hình; tài liệu nhạy cảm không bắt buộc mặc định.",
+    reports:
+      "Thống kê theo đơn vị, trình độ, chức danh và trạng thái; vai trò quản lý chỉ xem tổng hợp.",
+    accounts:
+      "Quản lý tài khoản và vai trò; tài khoản bị khóa được giữ lại để bảo toàn lịch sử và nhật ký.",
     audit: "Nhật ký chỉ đọc, ghi nhận các thao tác quan trọng.",
   };
   return descriptions[view] || "";
 }
 
-async function renderOverview() {
-  if (state.user.role === "admin") {
-    const region = $("#summary-cards");
-    region.replaceChildren();
-    region.append(makeElement("article", "stat-card", "Quản lý tài khoản và kiểm tra nhật ký trong các mục bên trái."));
-    $("#contract-alert-rows").replaceChildren();
-    return;
-  }
-  try {
-    const summary = await api("/reports/summary");
-    const cards = [
-      ["Tổng giảng viên", summary.total_teachers],
-      ["Hồ sơ chưa đầy đủ", summary.incomplete_profiles],
-      ["Hợp đồng sắp/đã hết hạn", summary.expiring_or_expired_contracts],
-      ["Yêu cầu chờ duyệt", summary.change_requests_by_status?.pending || 0],
-    ];
-    const region = $("#summary-cards");
-    region.replaceChildren();
-    for (const [label, value] of cards) {
-      const card = makeElement("article", "stat-card");
-      card.append(makeElement("div", "stat-label", label), makeElement("div", "stat-value", value));
-      region.append(card);
-    }
-    const alertBody = $("#contract-alert-rows");
-    alertBody.replaceChildren();
-    if (state.user.role === "hr") {
-      const alerts = await api("/contracts/alerts");
-      for (const alert of alerts) {
-        const row = document.createElement("tr");
-        [alert.contract_code, alert.teacher_name, alert.ends_on, alert.days_remaining, statusLabels[alert.status] || alert.status]
-          .forEach((value) => row.append(makeElement("td", "", value)));
-        alertBody.append(row);
-      }
-    }
-    if (!alertBody.children.length) {
-      alertBody.append(makeElement("tr", "", ""));
-      alertBody.firstElementChild.append(makeElement("td", "", "Không có cảnh báo hoặc bạn không có quyền xem chi tiết."));
-    }
-  } catch (error) {
-    showToast(`Không thể tải tổng quan: ${error.message}`, true);
-  }
+const SVG_NS = "http://www.w3.org/2000/svg";
+const badgeTone = {
+  active: "ok",
+  approved: "ok",
+  paused: "warn",
+  pending: "warn",
+  needs_info: "warn",
+  expiring: "warn",
+  ended: "muted",
+  terminated: "muted",
+  expired: "bad",
+  rejected: "bad",
+};
+
+function svgEl(tag, attributes = {}) {
+  const element = document.createElementNS(SVG_NS, tag);
+  Object.entries(attributes).forEach(([name, value]) =>
+    element.setAttribute(name, String(value)),
+  );
+  return element;
 }
 
-function setTable(headers, rows) {
-  const head = $("#workspace-head");
-  const body = $("#workspace-rows");
-  head.replaceChildren();
-  body.replaceChildren();
-  const headingRow = document.createElement("tr");
-  headers.forEach((header) => headingRow.append(makeElement("th", "", header)));
-  head.append(headingRow);
+function iconEl(name) {
+  const svg = svgEl("svg", { class: "ico", "aria-hidden": "true" });
+  svg.append(svgEl("use", { href: `#i-${name}` }));
+  return svg;
+}
+
+function badge(value, label) {
+  return makeElement(
+    "span",
+    `badge ${badgeTone[value] || ""}`.trim(),
+    label || statusLabels[value] || value,
+  );
+}
+
+function headerButton(label, action, icon, primary = true) {
+  const button = makeElement(
+    "button",
+    `button ${primary ? "button-primary" : "button-secondary"}`,
+  );
+  button.type = "button";
+  button.dataset.action = action;
+  button.append(iconEl(icon), document.createTextNode(label));
+  return button;
+}
+
+function departmentName(id) {
+  return state.departments.find((unit) => unit.id === id)?.name || "—";
+}
+
+function buildTable(headers, rows, emptyText = "Không có dữ liệu.") {
+  const wrap = makeElement("div", "table-wrap");
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headers.forEach((header) => headRow.append(makeElement("th", "", header)));
+  head.append(headRow);
+  const body = document.createElement("tbody");
   for (const values of rows) {
     const row = document.createElement("tr");
     values.forEach((value) => {
       const cell = document.createElement("td");
       if (value instanceof Node) cell.append(value);
-      else cell.textContent = value === null || value === undefined ? "—" : String(value);
+      else
+        cell.textContent =
+          value === null || value === undefined || value === ""
+            ? "—"
+            : String(value);
+      row.append(cell);
+    });
+    body.append(row);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  if (!rows.length) wrap.append(makeElement("div", "empty-state", emptyText));
+  return wrap;
+}
+
+function chartCard(title) {
+  const card = makeElement("article", "chart-card");
+  card.append(makeElement("h3", "", title));
+  return card;
+}
+
+function barChart(title, counts, labelOf = (key) => key) {
+  const card = chartCard(title);
+  const entries = Object.entries(counts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+  if (!entries.length) {
+    card.append(makeElement("p", "chart-empty", "Chưa có dữ liệu."));
+    return card;
+  }
+  const max = Math.max(...entries.map(([, count]) => count), 1);
+  for (const [key, count] of entries) {
+    const row = makeElement("div", "bar-row");
+    const name = makeElement("span", "bar-name", labelOf(key));
+    name.title = labelOf(key);
+    const svg = svgEl("svg", {
+      class: "bar-svg",
+      viewBox: "0 0 100 12",
+      preserveAspectRatio: "none",
+      "aria-hidden": "true",
+    });
+    svg.append(
+      svgEl("rect", {
+        class: "bar-track",
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 12,
+        rx: 3,
+      }),
+      svgEl("rect", {
+        class: "bar-fill",
+        x: 0,
+        y: 0,
+        width: Math.max(2, (count / max) * 100),
+        height: 12,
+        rx: 3,
+      }),
+    );
+    row.append(name, svg, makeElement("b", "bar-count", count));
+    card.append(row);
+  }
+  return card;
+}
+
+function donutChart(title, counts, labelOf = (key) => key) {
+  const card = chartCard(title);
+  const entries = Object.entries(counts || {})
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  if (!total) {
+    card.append(makeElement("p", "chart-empty", "Chưa có dữ liệu."));
+    return card;
+  }
+  const wrap = makeElement("div", "donut-wrap");
+  const svg = svgEl("svg", {
+    class: "donut",
+    viewBox: "0 0 42 42",
+    role: "img",
+    "aria-label": title,
+  });
+  svg.append(
+    svgEl("circle", { class: "donut-ring", cx: 21, cy: 21, r: 15.915 }),
+  );
+  let offset = 25;
+  const legend = makeElement("ul", "legend");
+  entries.forEach(([key, count], index) => {
+    const percent = (count / total) * 100;
+    svg.append(
+      svgEl("circle", {
+        class: `donut-seg seg${index}`,
+        cx: 21,
+        cy: 21,
+        r: 15.915,
+        "stroke-dasharray": `${percent} ${100 - percent}`,
+        "stroke-dashoffset": offset,
+      }),
+    );
+    offset -= percent;
+    const item = makeElement("li");
+    item.append(
+      makeElement("i", `dot${index}`),
+      makeElement("span", "", labelOf(key)),
+      makeElement("b", "", count),
+    );
+    legend.append(item);
+  });
+  const centre = svgEl("text", { class: "donut-total", x: 21, y: 22.5 });
+  centre.textContent = String(total);
+  const caption = svgEl("text", { class: "donut-cap", x: 21, y: 27 });
+  caption.textContent = "tổng";
+  svg.append(centre, caption);
+  wrap.append(svg, legend);
+  card.append(wrap);
+  return card;
+}
+
+function buildTimeline(history) {
+  const list = makeElement("ol", "timeline");
+  if (!history.length)
+    return makeElement("p", "empty-state", "Chưa có quá trình công tác.");
+  [...history]
+    .sort((a, b) => String(b.starts_on).localeCompare(String(a.starts_on)))
+    .forEach((item) => {
+      const entry = makeElement("li", item.ends_on ? "" : "current");
+      entry.append(
+        makeElement(
+          "time",
+          "",
+          `${item.starts_on} – ${item.ends_on || "Hiện tại"}`,
+        ),
+        makeElement(
+          "strong",
+          "",
+          [departmentName(item.department_id), item.position_title]
+            .filter((part) => part && part !== "—")
+            .join(" · "),
+        ),
+      );
+      if (item.reason) entry.append(makeElement("span", "", item.reason));
+      list.append(entry);
+    });
+  return list;
+}
+
+function statCard(label, value, icon, view) {
+  const card = makeElement(view ? "button" : "article", "stat-card");
+  if (view) {
+    card.type = "button";
+    card.dataset.action = "goto";
+    card.dataset.view = view;
+  }
+  const iconBox = makeElement("span", "stat-icon");
+  iconBox.append(iconEl(icon));
+  const text = makeElement("span", "stat-text");
+  text.append(
+    makeElement("span", "stat-value", value),
+    makeElement("span", "stat-label", label),
+  );
+  card.append(iconBox, text);
+  return card;
+}
+
+async function downloadResponse(path, filename) {
+  const response = await api(path);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+async function renderOverview() {
+  const cards = $("#summary-cards");
+  const charts = $("#overview-charts");
+  const extra = $("#overview-extra");
+  [cards, charts, extra].forEach((region) => region.replaceChildren());
+  const isAdmin = state.user.role === "admin";
+  const isHr = state.user.role === "hr";
+  $("#contract-panel").classList.toggle("hidden", isAdmin);
+  try {
+    if (isAdmin) {
+      const [users, logs] = await Promise.all([
+        api("/users"),
+        api("/audit-logs?limit=8"),
+      ]);
+      const active = users.filter((user) => user.is_active);
+      cards.append(
+        statCard("Tổng tài khoản", users.length, "users", "accounts"),
+        statCard("Đang hoạt động", active.length, "check", "accounts"),
+        statCard("Đã khóa", users.length - active.length, "lock", "accounts"),
+        statCard(
+          "Quản trị viên",
+          active.filter((user) => user.role === "admin").length,
+          "user",
+          "accounts",
+        ),
+      );
+      const panel = makeElement("section", "panel");
+      const heading = makeElement("div", "panel-heading");
+      heading.append(
+        makeElement("h2", "", "Hoạt động gần đây"),
+        makeElement(
+          "p",
+          "",
+          "Các thao tác mới nhất được ghi nhận trong hệ thống.",
+        ),
+      );
+      panel.append(
+        heading,
+        buildTable(
+          ["Thời gian", "Thao tác", "Đối tượng", "Kết quả"],
+          logs.map((item) => [
+            new Date(item.created_at).toLocaleString("vi-VN"),
+            item.action,
+            item.entity_type,
+            item.outcome,
+          ]),
+          "Chưa có hoạt động nào.",
+        ),
+      );
+      extra.append(panel);
+      return;
+    }
+    const summary = await api("/reports/summary");
+    const target = (hrView) => (isHr ? hrView : "reports");
+    cards.append(
+      statCard(
+        "Tổng giảng viên",
+        summary.total_teachers,
+        "users",
+        target("teachers"),
+      ),
+      statCard(
+        "Hồ sơ chưa đầy đủ",
+        summary.incomplete_profiles,
+        "warn",
+        target("teachers"),
+      ),
+      statCard(
+        "Hợp đồng sắp/đã hết hạn",
+        summary.expiring_or_expired_contracts,
+        "clock",
+        target("contracts"),
+      ),
+      statCard(
+        "Yêu cầu chờ duyệt",
+        summary.change_requests_by_status?.pending || 0,
+        "chat",
+        "changes",
+      ),
+    );
+    charts.append(
+      barChart("Giảng viên theo đơn vị", summary.teachers_by_department),
+      donutChart("Cơ cấu trình độ", summary.teachers_by_degree),
+      donutChart(
+        "Trạng thái công tác",
+        summary.teachers_by_status,
+        (key) => statusLabels[key] || key,
+      ),
+    );
+    const alertBody = $("#contract-alert-rows");
+    alertBody.replaceChildren();
+    if (isHr) {
+      const alerts = await api("/contracts/alerts");
+      for (const alert of alerts) {
+        const row = document.createElement("tr");
+        [
+          alert.contract_code,
+          alert.teacher_name,
+          alert.ends_on,
+          alert.days_remaining,
+          badge(alert.status),
+        ].forEach((value) => {
+          const cell = document.createElement("td");
+          if (value instanceof Node) cell.append(value);
+          else cell.textContent = String(value);
+          row.append(cell);
+        });
+        alertBody.append(row);
+      }
+    }
+    const empty = $("#contract-empty");
+    empty.classList.toggle("hidden", alertBody.children.length > 0);
+    empty.textContent = isHr
+      ? "Hiện chưa có hợp đồng nào cần chú ý."
+      : "Vai trò Người quản lý chỉ xem số liệu tổng hợp; chi tiết hợp đồng do bộ phận nhân sự quản lý.";
+  } catch (error) {
+    showToast(`Không thể tải tổng quan: ${error.message}`, true);
+  }
+}
+
+function setTable(headers, rows, options = {}) {
+  const head = $("#workspace-head");
+  head.replaceChildren();
+  const headingRow = document.createElement("tr");
+  headers.forEach((header) => headingRow.append(makeElement("th", "", header)));
+  head.append(headingRow);
+  state.table = { rows, size: options.pageSize || 10, page: 1 };
+  drawTablePage();
+}
+
+function drawTablePage() {
+  const { rows, size } = state.table;
+  const pages = Math.max(1, Math.ceil(rows.length / size));
+  state.table.page = Math.min(Math.max(1, state.table.page), pages);
+  const body = $("#workspace-rows");
+  body.replaceChildren();
+  const first = (state.table.page - 1) * size;
+  for (const values of rows.slice(first, first + size)) {
+    const row = document.createElement("tr");
+    values.forEach((value) => {
+      const cell = document.createElement("td");
+      if (value instanceof Node) cell.append(value);
+      else
+        cell.textContent =
+          value === null || value === undefined ? "—" : String(value);
       row.append(cell);
     });
     body.append(row);
   }
   $("#workspace-empty").classList.toggle("hidden", rows.length > 0);
+  const pager = $("#workspace-pager");
+  pager.replaceChildren();
+  pager.classList.toggle("hidden", pages <= 1);
+  if (pages > 1) {
+    const previous = actionButton("‹ Trước", "page-prev");
+    previous.disabled = state.table.page === 1;
+    const next = actionButton("Sau ›", "page-next");
+    next.disabled = state.table.page === pages;
+    pager.append(
+      previous,
+      makeElement(
+        "span",
+        "",
+        `Trang ${state.table.page}/${pages} · ${rows.length} bản ghi`,
+      ),
+      next,
+    );
+  }
 }
 
 function actionButton(label, action, id, className = "") {
@@ -311,6 +715,7 @@ async function renderWorkspace() {
   await refreshData();
   const renderers = {
     teachers: renderTeachers,
+    teacherDetail: renderTeacherDetail,
     teacherChecklist: renderTeacherChecklist,
     departments: renderDepartments,
     qualifications: renderQualifications,
@@ -333,7 +738,12 @@ function teacherSelector(onChange, required = true) {
   select.required = required;
   select.append(new Option("Chọn giảng viên", ""));
   for (const teacher of state.teachers) {
-    select.add(new Option(`${teacher.employee_code} — ${teacher.full_name}`, String(teacher.id)));
+    select.add(
+      new Option(
+        `${teacher.employee_code} — ${teacher.full_name}`,
+        String(teacher.id),
+      ),
+    );
   }
   select.value = state.selectedTeacherId;
   select.addEventListener("change", () => {
@@ -345,71 +755,122 @@ function teacherSelector(onChange, required = true) {
 }
 
 async function renderTeachers() {
-  $("#workspace-actions").append(actionButton("＋ Thêm giảng viên", "add-teacher"));
+  $("#workspace-actions").append(
+    headerButton("Thêm giảng viên", "add-teacher", "plus"),
+    headerButton("Nhập Excel", "import-teachers", "up", false),
+    headerButton("Xuất Excel", "export-teachers", "down", false),
+  );
   const filter = makeElement("input", "workspace-search");
   filter.type = "search";
   filter.placeholder = "Tìm theo tên hoặc mã";
   const departmentFilter = document.createElement("select");
   departmentFilter.append(new Option("Tất cả đơn vị", ""));
-  state.departments.forEach((unit) => departmentFilter.add(new Option(unit.name, String(unit.id))));
+  state.departments.forEach((unit) =>
+    departmentFilter.add(new Option(unit.name, String(unit.id))),
+  );
   const degreeFilter = document.createElement("select");
   degreeFilter.append(new Option("Tất cả trình độ", ""));
-  [...new Set(state.teachers.map((teacher) => teacher.academic_degree).filter(Boolean))]
+  [
+    ...new Set(
+      state.teachers.map((teacher) => teacher.academic_degree).filter(Boolean),
+    ),
+  ]
     .sort((left, right) => left.localeCompare(right, "vi"))
     .forEach((degree) => degreeFilter.add(new Option(degree, degree)));
   const statusFilter = document.createElement("select");
   statusFilter.append(new Option("Tất cả trạng thái", ""));
-  [["active", "Đang công tác"], ["paused", "Tạm ngừng"], ["ended", "Đã kết thúc"]]
-    .forEach(([value, label]) => statusFilter.add(new Option(label, value)));
-  $("#workspace-filters").append(filter, departmentFilter, degreeFilter, statusFilter);
+  [
+    ["active", "Đang công tác"],
+    ["paused", "Tạm ngừng"],
+    ["ended", "Đã kết thúc"],
+  ].forEach(([value, label]) => statusFilter.add(new Option(label, value)));
+  $("#workspace-filters").append(
+    filter,
+    departmentFilter,
+    degreeFilter,
+    statusFilter,
+  );
   const drawRows = () => {
     const query = filter.value.trim().toLocaleLowerCase("vi");
-    const filtered = state.teachers.filter((teacher) =>
-      `${teacher.employee_code} ${teacher.full_name}`.toLocaleLowerCase("vi").includes(query) &&
-      (!departmentFilter.value || teacher.department_id === Number(departmentFilter.value)) &&
-      (!degreeFilter.value || teacher.academic_degree === degreeFilter.value) &&
-      (!statusFilter.value || teacher.employment_status === statusFilter.value));
+    const filtered = state.teachers.filter(
+      (teacher) =>
+        `${teacher.employee_code} ${teacher.full_name}`
+          .toLocaleLowerCase("vi")
+          .includes(query) &&
+        (!departmentFilter.value ||
+          teacher.department_id === Number(departmentFilter.value)) &&
+        (!degreeFilter.value ||
+          teacher.academic_degree === degreeFilter.value) &&
+        (!statusFilter.value ||
+          teacher.employment_status === statusFilter.value),
+    );
+    const params = new URLSearchParams();
+    if (filter.value.trim()) params.set("q", filter.value.trim());
+    if (departmentFilter.value)
+      params.set("department_id", departmentFilter.value);
+    if (degreeFilter.value) params.set("academic_degree", degreeFilter.value);
+    if (statusFilter.value) params.set("employment_status", statusFilter.value);
+    state.teacherQuery = params.toString();
     setTable(
-      ["Mã", "Họ tên", "Đơn vị", "Trình độ", "Trạng thái", "Nghiệp vụ", ""],
+      ["Mã", "Họ tên", "Đơn vị", "Trình độ", "Trạng thái", "Thao tác"],
       filtered.map((teacher) => [
         teacher.employee_code,
         teacher.full_name,
-        state.departments.find((item) => item.id === teacher.department_id)?.name || "—",
+        departmentName(teacher.department_id),
         teacher.academic_degree || "—",
-        statusLabels[teacher.employment_status] || teacher.employment_status,
-        actionButton("Bằng cấp", "teacher-detail", teacher.id),
+        badge(teacher.employment_status),
         actionGroup([
+          actionButton("Xem hồ sơ", "teacher-open", teacher.id, "primary"),
           actionButton("Sửa", "edit-teacher", teacher.id),
           actionButton("Checklist", "teacher-checklist", teacher.id),
+          actionButton("Xóa", "delete-teacher", teacher.id, "danger"),
         ]),
       ]),
     );
   };
   [filter, departmentFilter, degreeFilter, statusFilter].forEach((control) =>
-    control.addEventListener("input", drawRows));
+    control.addEventListener("input", drawRows),
+  );
   [departmentFilter, degreeFilter, statusFilter].forEach((control) =>
-    control.addEventListener("change", drawRows));
+    control.addEventListener("change", drawRows),
+  );
   drawRows();
 }
 
 async function renderDepartments() {
   if (state.user.role === "hr") {
-    $("#workspace-actions").append(actionButton("＋ Thêm đơn vị", "add-department"));
+    $("#workspace-actions").append(
+      headerButton("Thêm đơn vị", "add-department", "plus"),
+    );
   }
   const rows = state.departments.map((department) => {
-    const parent = state.departments.find((item) => item.id === department.parent_id);
-    const actions = document.createElement("div");
+    const parent = state.departments.find(
+      (item) => item.id === department.parent_id,
+    );
+    const actions = makeElement("div", "workspace-actions");
     if (state.user.role === "hr") {
       actions.append(actionButton("Sửa", "edit-department", department.id));
-      if (department.is_active) actions.append(actionButton("Ngừng", "toggle-department", department.id));
-      else actions.append(actionButton("Kích hoạt", "toggle-department", department.id));
+      if (department.is_active)
+        actions.append(
+          actionButton("Ngừng", "toggle-department", department.id),
+        );
+      else
+        actions.append(
+          actionButton("Kích hoạt", "toggle-department", department.id),
+        );
+      actions.append(
+        actionButton("Xóa", "delete-department", department.id, "danger"),
+      );
     }
     return [
       department.code,
       department.name,
       parent?.name || "—",
       department.description || "—",
-      department.is_active ? "Đang hoạt động" : "Đã ngừng",
+      badge(
+        department.is_active ? "active" : "ended",
+        department.is_active ? "Đang hoạt động" : "Đã ngừng",
+      ),
       actions,
     ];
   });
@@ -419,7 +880,8 @@ async function renderDepartments() {
 async function renderQualifications() {
   $("#workspace-filters").append(teacherSelector(() => renderQualifications()));
   const teacherId = state.selectedTeacherId;
-  if (!teacherId) return setTable(["Loại", "Tên", "Chuyên ngành", "Cơ sở", "Năm"], []);
+  if (!teacherId)
+    return setTable(["Loại", "Tên", "Chuyên ngành", "Cơ sở", "Năm"], []);
   const qualifications = await api(`/teachers/${teacherId}/qualifications`);
   const rows = qualifications.map((item) => [
     item.qualification_type,
@@ -429,82 +891,165 @@ async function renderQualifications() {
     item.issued_year || item.issued_on || "—",
   ]);
   setTable(["Loại", "Tên", "Chuyên ngành", "Cơ sở", "Năm"], rows);
-  $("#workspace-form-region").append(buildForm([
-    { name: "qualification_type", label: "Loại", type: "select", required: true, options: [["degree", "Bằng cấp"], ["certificate", "Chứng chỉ"], ["research", "Nghiên cứu"], ["other", "Khác"]] },
-    { name: "title", label: "Tên văn bằng/chứng chỉ", required: true },
-    { name: "specialty", label: "Chuyên ngành" },
-    { name: "institution", label: "Cơ sở đào tạo" },
-    { name: "issued_year", label: "Năm cấp", type: "number" },
-  ], "Thêm bằng cấp hoặc chứng chỉ", async (values) => {
-    if (values.issued_year) values.issued_year = Number(values.issued_year);
-    await api(`/teachers/${teacherId}/qualifications`, { method: "POST", body: JSON.stringify(values) });
-  }));
+  $("#workspace-form-region").append(
+    buildForm(
+      [
+        {
+          name: "qualification_type",
+          label: "Loại",
+          type: "select",
+          required: true,
+          options: [
+            ["degree", "Bằng cấp"],
+            ["certificate", "Chứng chỉ"],
+            ["research", "Nghiên cứu"],
+            ["other", "Khác"],
+          ],
+        },
+        { name: "title", label: "Tên văn bằng/chứng chỉ", required: true },
+        { name: "specialty", label: "Chuyên ngành" },
+        { name: "institution", label: "Cơ sở đào tạo" },
+        { name: "issued_year", label: "Năm cấp", type: "number" },
+      ],
+      "Thêm bằng cấp hoặc chứng chỉ",
+      async (values) => {
+        if (values.issued_year) values.issued_year = Number(values.issued_year);
+        await api(`/teachers/${teacherId}/qualifications`, {
+          method: "POST",
+          body: JSON.stringify(values),
+        });
+      },
+    ),
+  );
 }
 
 async function renderContracts() {
   $("#workspace-filters").append(teacherSelector(() => renderContracts()));
-  state.contractWarningDays = (await api("/settings/contract-warning-days")).days;
-  $("#workspace-form-region").append(buildForm([
-    { name: "days", label: `Cảnh báo trước bao nhiêu ngày (hiện tại ${state.contractWarningDays})`, type: "number", required: true },
-  ], "Cấu hình cảnh báo hợp đồng", async (values) => {
-    const days = Number(values.days);
-    if (!Number.isInteger(days) || days < 0 || days > 365) throw new Error("Số ngày phải từ 0 đến 365.");
-    await api(`/settings/contract-warning-days?days=${days}`, { method: "PUT" });
-  }));
+  state.contractWarningDays = (
+    await api("/settings/contract-warning-days")
+  ).days;
+  $("#workspace-form-region").append(
+    buildForm(
+      [
+        {
+          name: "days",
+          label: `Cảnh báo trước bao nhiêu ngày (hiện tại ${state.contractWarningDays})`,
+          type: "number",
+          required: true,
+        },
+      ],
+      "Cấu hình cảnh báo hợp đồng",
+      async (values) => {
+        const days = Number(values.days);
+        if (!Number.isInteger(days) || days < 0 || days > 365)
+          throw new Error("Số ngày phải từ 0 đến 365.");
+        await api(`/settings/contract-warning-days?days=${days}`, {
+          method: "PUT",
+        });
+      },
+    ),
+  );
   const teacherId = state.selectedTeacherId;
-  if (!teacherId) return setTable(["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"], []);
+  if (!teacherId)
+    return setTable(
+      ["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"],
+      [],
+    );
   const contracts = await api(`/teachers/${teacherId}/contracts`);
   const rows = contracts.map((item) => [
     item.contract_code,
     item.contract_type,
     item.starts_on,
     item.ends_on || "Không thời hạn",
-    statusLabels[item.display_status] || item.display_status,
+    badge(item.display_status),
   ]);
   setTable(["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"], rows);
-  $("#workspace-form-region").append(buildForm([
-    { name: "contract_code", label: "Mã hợp đồng", required: true },
-    { name: "contract_type", label: "Loại hợp đồng", required: true },
-    { name: "signed_on", label: "Ngày ký", type: "date" },
-    { name: "starts_on", label: "Ngày bắt đầu", type: "date", required: true },
-    { name: "ends_on", label: "Ngày kết thúc", type: "date" },
-  ], "Thêm hợp đồng", async (values) => {
-    await api(`/teachers/${teacherId}/contracts`, { method: "POST", body: JSON.stringify(values) });
-  }));
+  $("#workspace-form-region").append(
+    buildForm(
+      [
+        { name: "contract_code", label: "Mã hợp đồng", required: true },
+        { name: "contract_type", label: "Loại hợp đồng", required: true },
+        { name: "signed_on", label: "Ngày ký", type: "date" },
+        {
+          name: "starts_on",
+          label: "Ngày bắt đầu",
+          type: "date",
+          required: true,
+        },
+        { name: "ends_on", label: "Ngày kết thúc", type: "date" },
+      ],
+      "Thêm hợp đồng",
+      async (values) => {
+        await api(`/teachers/${teacherId}/contracts`, {
+          method: "POST",
+          body: JSON.stringify(values),
+        });
+      },
+    ),
+  );
 }
 
 async function renderHistory() {
   $("#workspace-filters").append(teacherSelector(() => renderHistory()));
-  if (!state.selectedTeacherId) return setTable(["Đơn vị", "Chức danh", "Bắt đầu", "Kết thúc", "Lý do"], []);
-  const history = await api(`/teachers/${state.selectedTeacherId}/work-history`);
+  if (!state.selectedTeacherId)
+    return setTable(
+      ["Đơn vị", "Chức danh", "Bắt đầu", "Kết thúc", "Lý do"],
+      [],
+    );
+  const history = await api(
+    `/teachers/${state.selectedTeacherId}/work-history`,
+  );
+  $("#workspace-form-region").append(buildTimeline(history));
   setTable(
     ["Đơn vị", "Chức danh", "Bắt đầu", "Kết thúc", "Lý do"],
     history.map((item) => [
-      state.departments.find((unit) => unit.id === item.department_id)?.name || "—",
+      state.departments.find((unit) => unit.id === item.department_id)?.name ||
+        "—",
       item.position_title || "—",
       item.starts_on,
       item.ends_on || "Hiện tại",
       item.reason || "—",
     ]),
   );
-  $("#workspace-form-region").append(buildForm([
-    { name: "department_id", label: "Đơn vị", type: "select", required: true, options: state.departments.map((unit) => [String(unit.id), unit.name]) },
-    { name: "position_title", label: "Chức danh" },
-    { name: "starts_on", label: "Ngày bắt đầu", type: "date", required: true },
-    { name: "ends_on", label: "Ngày kết thúc", type: "date" },
-    { name: "reason", label: "Lý do" },
-  ], "Bổ sung giai đoạn công tác", async (values) => {
-    values.department_id = Number(values.department_id);
-    await api(`/teachers/${state.selectedTeacherId}/work-history`, {
-      method: "POST",
-      body: JSON.stringify(values),
-    });
-  }));
+  $("#workspace-form-region").append(
+    buildForm(
+      [
+        {
+          name: "department_id",
+          label: "Đơn vị",
+          type: "select",
+          required: true,
+          options: state.departments.map((unit) => [
+            String(unit.id),
+            unit.name,
+          ]),
+        },
+        { name: "position_title", label: "Chức danh" },
+        {
+          name: "starts_on",
+          label: "Ngày bắt đầu",
+          type: "date",
+          required: true,
+        },
+        { name: "ends_on", label: "Ngày kết thúc", type: "date" },
+        { name: "reason", label: "Lý do" },
+      ],
+      "Bổ sung giai đoạn công tác",
+      async (values) => {
+        values.department_id = Number(values.department_id);
+        await api(`/teachers/${state.selectedTeacherId}/work-history`, {
+          method: "POST",
+          body: JSON.stringify(values),
+        });
+      },
+    ),
+  );
 }
 
 async function renderDocuments() {
   $("#workspace-filters").append(teacherSelector(() => renderDocuments()));
-  if (!state.selectedTeacherId) return setTable(["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"], []);
+  if (!state.selectedTeacherId)
+    return setTable(["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"], []);
   const documents = await api(`/teachers/${state.selectedTeacherId}/documents`);
   setTable(
     ["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"],
@@ -532,14 +1077,20 @@ async function renderDocuments() {
   const select = document.createElement("select");
   select.name = "checklist_item_id";
   select.append(new Option("Không gắn checklist", ""));
-  checklist.filter((item) => item.is_active).forEach((item) => select.add(new Option(item.label, String(item.id))));
+  checklist
+    .filter((item) => item.is_active)
+    .forEach((item) => select.add(new Option(item.label, String(item.id))));
   form.append(select);
   const qualificationSelect = document.createElement("select");
   qualificationSelect.append(new Option("Không gắn bằng cấp", ""));
-  qualifications.forEach((item) => qualificationSelect.add(new Option(item.title, String(item.id))));
+  qualifications.forEach((item) =>
+    qualificationSelect.add(new Option(item.title, String(item.id))),
+  );
   const contractSelect = document.createElement("select");
   contractSelect.append(new Option("Không gắn hợp đồng", ""));
-  contracts.forEach((item) => contractSelect.add(new Option(item.contract_code, String(item.id))));
+  contracts.forEach((item) =>
+    contractSelect.add(new Option(item.contract_code, String(item.id))),
+  );
   qualificationSelect.addEventListener("change", () => {
     contractSelect.disabled = Boolean(qualificationSelect.value);
   });
@@ -555,10 +1106,14 @@ async function renderDocuments() {
     const data = new FormData();
     data.append("file", file.files[0]);
     if (select.value) data.append("checklist_item_id", select.value);
-    if (qualificationSelect.value) data.append("qualification_id", qualificationSelect.value);
+    if (qualificationSelect.value)
+      data.append("qualification_id", qualificationSelect.value);
     if (contractSelect.value) data.append("contract_id", contractSelect.value);
     try {
-      await api(`/teachers/${state.selectedTeacherId}/documents`, { method: "POST", body: data });
+      await api(`/teachers/${state.selectedTeacherId}/documents`, {
+        method: "POST",
+        body: data,
+      });
       showToast("Đã tải tài liệu lên.");
       await renderDocuments();
     } catch (error) {
@@ -571,13 +1126,24 @@ async function renderDocuments() {
 async function renderChanges() {
   const requests = await api("/change-requests");
   setTable(
-    ["ID", "Giảng viên", "Loại", "Hiện tại", "Đề xuất", "Lý do", "Trạng thái", "Thao tác"],
+    [
+      "ID",
+      "Giảng viên",
+      "Loại",
+      "Hiện tại",
+      "Đề xuất",
+      "Lý do",
+      "Trạng thái",
+      "Thao tác",
+    ],
     requests.map((item) => {
       const actions = document.createElement("div");
       if (state.user.role === "manager" && item.status === "pending") {
         actions.append(actionButton("Duyệt", "decide-change", item.id));
         actions.append(actionButton("Từ chối", "reject-change", item.id));
-        actions.append(actionButton("Yêu cầu bổ sung", "request-info", item.id));
+        actions.append(
+          actionButton("Yêu cầu bổ sung", "request-info", item.id),
+        );
       }
       if (state.user.role === "hr" && item.status === "needs_info") {
         actions.append(actionButton("Bổ sung", "resubmit-change", item.id));
@@ -589,7 +1155,7 @@ async function renderChanges() {
         JSON.stringify(item.current_value),
         JSON.stringify(item.proposed_value),
         item.reason,
-        statusLabels[item.status] || item.status,
+        badge(item.status),
         actions,
       ];
     }),
@@ -598,8 +1164,19 @@ async function renderChanges() {
     const teacherSelect = document.createElement("select");
     teacherSelect.required = true;
     teacherSelect.append(new Option("Chọn giảng viên", ""));
-    state.teachers.forEach((teacher) => teacherSelect.add(new Option(`${teacher.employee_code} — ${teacher.full_name}`, String(teacher.id))));
-    const type = inputField({ name: "change_type", label: "Loại thay đổi", required: true });
+    state.teachers.forEach((teacher) =>
+      teacherSelect.add(
+        new Option(
+          `${teacher.employee_code} — ${teacher.full_name}`,
+          String(teacher.id),
+        ),
+      ),
+    );
+    const type = inputField({
+      name: "change_type",
+      label: "Loại thay đổi",
+      required: true,
+    });
     const field = document.createElement("select");
     field.name = "field";
     field.required = true;
@@ -610,20 +1187,48 @@ async function renderChanges() {
       new Option("Chức danh", "academic_title"),
       new Option("Trạng thái công tác", "employment_status"),
     );
-    const proposed = inputField({ name: "proposed", label: "Giá trị đề xuất", required: true });
-    const reason = inputField({ name: "reason", label: "Lý do", required: true });
-    const effective = inputField({ name: "effective_on", label: "Ngày có hiệu lực", type: "date" });
+    const proposed = inputField({
+      name: "proposed",
+      label: "Giá trị đề xuất",
+      required: true,
+    });
+    const reason = inputField({
+      name: "reason",
+      label: "Lý do",
+      required: true,
+    });
+    const effective = inputField({
+      name: "effective_on",
+      label: "Ngày có hiệu lực",
+      type: "date",
+    });
     const form = document.createElement("form");
     form.className = "inline-form";
-    form.append(makeElement("strong", "", "Tạo yêu cầu thay đổi"), teacherSelect, type, field, proposed, reason, effective);
-    const submit = makeElement("button", "button button-primary", "Gửi yêu cầu");
+    form.append(
+      makeElement("strong", "", "Tạo yêu cầu thay đổi"),
+      teacherSelect,
+      type,
+      field,
+      proposed,
+      reason,
+      effective,
+    );
+    const submit = makeElement(
+      "button",
+      "button button-primary",
+      "Gửi yêu cầu",
+    );
     submit.type = "submit";
     form.append(submit);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const fieldName = field.value;
-      const value = ["department_id"].includes(fieldName) ? Number(proposed.value) : proposed.value;
-      const current = state.teachers.find((teacher) => teacher.id === Number(teacherSelect.value));
+      const value = ["department_id"].includes(fieldName)
+        ? Number(proposed.value)
+        : proposed.value;
+      const current = state.teachers.find(
+        (teacher) => teacher.id === Number(teacherSelect.value),
+      );
       try {
         await api(`/teachers/${teacherSelect.value}/change-requests`, {
           method: "POST",
@@ -648,7 +1253,16 @@ async function renderChanges() {
 async function renderChecklist() {
   const items = await api("/checklist-items");
   setTable(
-    ["Mã", "Tài liệu", "Nhóm", "Phân loại", "Điều kiện áp dụng", "Nhạy cảm", "Trạng thái", "Thao tác"],
+    [
+      "Mã",
+      "Tài liệu",
+      "Nhóm",
+      "Phân loại",
+      "Điều kiện áp dụng",
+      "Nhạy cảm",
+      "Trạng thái",
+      "Thao tác",
+    ],
     items.map((item) => [
       item.code,
       item.label,
@@ -659,27 +1273,51 @@ async function renderChecklist() {
       item.is_active ? "Đang dùng" : "Đã ngừng",
       actionGroup([
         actionButton("Sửa điều kiện", "edit-checklist-item", item.id),
-        actionButton(item.is_active ? "Ngừng" : "Kích hoạt", "toggle-checklist-active", item.id),
+        actionButton(
+          item.is_active ? "Ngừng" : "Kích hoạt",
+          "toggle-checklist-active",
+          item.id,
+        ),
       ]),
     ]),
   );
-  $("#workspace-form-region").append(buildForm([
-    { name: "code", label: "Mã mục (chữ thường, số, gạch ngang)", required: true },
-    { name: "label", label: "Tên trường/tài liệu", required: true },
-    { name: "category", label: "Nhóm", required: true },
-    {
-      name: "classification",
-      label: "Phân loại trong danh mục",
-      type: "select",
-      required: true,
-      options: [["required", "Bắt buộc"], ["conditional", "Có điều kiện"], ["optional", "Tùy chọn"]],
-    },
-    { name: "applicability", label: "Điều kiện áp dụng (tối đa 500 ký tự)" },
-    { name: "is_sensitive", label: "Dữ liệu nhạy cảm", type: "checkbox" },
-  ], "Thêm mục checklist", async (values) => {
-    values.is_sensitive = Boolean(values.is_sensitive);
-    await api("/checklist-items", { method: "POST", body: JSON.stringify(values) });
-  }));
+  $("#workspace-form-region").append(
+    buildForm(
+      [
+        {
+          name: "code",
+          label: "Mã mục (chữ thường, số, gạch ngang)",
+          required: true,
+        },
+        { name: "label", label: "Tên trường/tài liệu", required: true },
+        { name: "category", label: "Nhóm", required: true },
+        {
+          name: "classification",
+          label: "Phân loại trong danh mục",
+          type: "select",
+          required: true,
+          options: [
+            ["required", "Bắt buộc"],
+            ["conditional", "Có điều kiện"],
+            ["optional", "Tùy chọn"],
+          ],
+        },
+        {
+          name: "applicability",
+          label: "Điều kiện áp dụng (tối đa 500 ký tự)",
+        },
+        { name: "is_sensitive", label: "Dữ liệu nhạy cảm", type: "checkbox" },
+      ],
+      "Thêm mục checklist",
+      async (values) => {
+        values.is_sensitive = Boolean(values.is_sensitive);
+        await api("/checklist-items", {
+          method: "POST",
+          body: JSON.stringify(values),
+        });
+      },
+    ),
+  );
 }
 
 async function renderTeacherChecklist() {
@@ -705,11 +1343,20 @@ async function renderTeacherChecklist() {
   );
   $("#workspace-form-region").append(summary);
   setTable(
-    ["Tài liệu", "Nhóm", "Phân loại", "Điều kiện áp dụng", "Yêu cầu với giảng viên", "Minh chứng"],
+    [
+      "Tài liệu",
+      "Nhóm",
+      "Phân loại",
+      "Điều kiện áp dụng",
+      "Yêu cầu với giảng viên",
+      "Minh chứng",
+    ],
     requirements.map((item) => {
       const select = document.createElement("select");
       select.dataset.itemId = String(item.item_id);
-      for (const [value, label] of Object.entries(checklistRequirementStatuses)) {
+      for (const [value, label] of Object.entries(
+        checklistRequirementStatuses,
+      )) {
         select.add(new Option(label, value));
       }
       select.value = item.status;
@@ -739,10 +1386,13 @@ async function renderTeacherChecklist() {
   $$("#workspace-rows select").forEach((select) => {
     select.addEventListener("change", async () => {
       try {
-        await api(`/teachers/${teacherId}/checklist-requirements/${select.dataset.itemId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ status: select.value }),
-        });
+        await api(
+          `/teachers/${teacherId}/checklist-requirements/${select.dataset.itemId}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({ status: select.value }),
+          },
+        );
         await renderTeacherChecklist();
       } catch (error) {
         showToast(error.message, true);
@@ -755,54 +1405,131 @@ async function renderTeacherChecklist() {
 async function renderReports() {
   const departments = await api("/departments");
   const department = document.createElement("select");
+  department.setAttribute("aria-label", "Đơn vị");
   department.append(new Option("Tất cả đơn vị", ""));
-  departments.forEach((item) => department.add(new Option(item.name, String(item.id))));
-  const start = inputField({ name: "start_date", label: "Từ ngày", type: "date" });
+  departments.forEach((item) =>
+    department.add(new Option(item.name, String(item.id))),
+  );
+  const start = inputField({
+    name: "start_date",
+    label: "Từ ngày",
+    type: "date",
+  });
   const end = inputField({ name: "end_date", label: "Đến ngày", type: "date" });
   const form = document.createElement("form");
   form.className = "inline-form";
-  form.append(makeElement("strong", "", "Điều kiện lọc"), department, start, end);
+  form.append(
+    makeElement("strong", "", "Điều kiện lọc"),
+    department,
+    start,
+    end,
+  );
   const run = makeElement("button", "button button-primary", "Tạo báo cáo");
   run.type = "submit";
-  const exportButton = makeElement("button", "button button-secondary", "Xuất Excel");
+  const exportButton = makeElement(
+    "button",
+    "button button-secondary",
+    "Xuất Excel",
+  );
   exportButton.type = "button";
   form.append(run, exportButton);
+  const startInput = start.querySelector("input");
+  const endInput = end.querySelector("input");
   const query = () => {
     const params = new URLSearchParams();
     if (department.value) params.set("department_id", department.value);
-    if (start.value) params.set("start_date", start.value);
-    if (end.value) params.set("end_date", end.value);
+    if (startInput.value) params.set("start_date", startInput.value);
+    if (endInput.value) params.set("end_date", endInput.value);
     return params.toString();
   };
+  const results = makeElement("div", "report-results");
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const summary = await api(`/reports/summary?${query()}`);
-    setTable(
-      ["Chỉ số", "Giá trị"],
-      [
-        ["Tổng giảng viên", summary.total_teachers],
-        ["Hồ sơ chưa đầy đủ", summary.incomplete_profiles],
-        ["Hợp đồng sắp/đã hết hạn", summary.expiring_or_expired_contracts],
-        ["Điều kiện lọc", JSON.stringify(summary.filters)],
-        ...Object.entries(summary.teachers_by_department).map(([name, count]) => [`Đơn vị: ${name}`, count]),
-        ...Object.entries(summary.teachers_by_degree).map(([name, count]) => [`Trình độ: ${name}`, count]),
-        ...Object.entries(summary.teachers_by_status).map(([name, count]) => [`Trạng thái: ${name}`, count]),
-      ],
-    );
+    try {
+      const summary = await api(`/reports/summary?${query()}`);
+      const requests = summary.change_requests_by_status || {};
+      const cards = makeElement("div", "stats-grid");
+      cards.append(
+        statCard("Tổng giảng viên", summary.total_teachers, "users"),
+        statCard("Hồ sơ chưa đầy đủ", summary.incomplete_profiles, "warn"),
+        statCard(
+          "Hợp đồng sắp/đã hết hạn",
+          summary.expiring_or_expired_contracts,
+          "clock",
+        ),
+        statCard("Yêu cầu chờ duyệt", requests.pending || 0, "chat"),
+      );
+      const charts = makeElement("div", "chart-grid");
+      charts.append(
+        barChart("Giảng viên theo đơn vị", summary.teachers_by_department),
+        donutChart("Theo trình độ", summary.teachers_by_degree),
+        barChart("Theo chức danh", summary.teachers_by_title),
+        donutChart(
+          "Theo trạng thái công tác",
+          summary.teachers_by_status,
+          (key) => statusLabels[key] || key,
+        ),
+        donutChart(
+          "Yêu cầu thay đổi",
+          requests,
+          (key) => statusLabels[key] || key,
+        ),
+      );
+      results.replaceChildren(cards, charts);
+      const scope = [`Đơn vị: ${department.selectedOptions[0].textContent}`];
+      if (startInput.value) scope.push(`từ ${startInput.value}`);
+      if (endInput.value) scope.push(`đến ${endInput.value}`);
+      scope.push("tính theo ngày tạo hồ sơ");
+      const listOf = (counts, labelOf = (key) => key) =>
+        Object.entries(counts || {}).map(([name, count]) => [
+          labelOf(name),
+          count,
+        ]);
+      setTable(
+        ["Chỉ số", "Giá trị"],
+        [
+          ["Điều kiện lọc", scope.join(" · ")],
+          ["Tổng giảng viên", summary.total_teachers],
+          ["Hồ sơ chưa đầy đủ", summary.incomplete_profiles],
+          ["Hợp đồng sắp/đã hết hạn", summary.expiring_or_expired_contracts],
+          ...listOf(summary.teachers_by_department).map(([name, count]) => [
+            `Đơn vị: ${name}`,
+            count,
+          ]),
+          ...listOf(summary.teachers_by_degree).map(([name, count]) => [
+            `Trình độ: ${name}`,
+            count,
+          ]),
+          ...listOf(summary.teachers_by_title).map(([name, count]) => [
+            `Chức danh: ${name}`,
+            count,
+          ]),
+          ...listOf(
+            summary.teachers_by_status,
+            (key) => statusLabels[key] || key,
+          ).map(([name, count]) => [`Trạng thái: ${name}`, count]),
+          ...listOf(requests, (key) => statusLabels[key] || key).map(
+            ([name, count]) => [`Yêu cầu: ${name}`, count],
+          ),
+        ],
+        { pageSize: 15 },
+      );
+    } catch (error) {
+      showToast(error.message, true);
+    }
   });
   exportButton.addEventListener("click", async () => {
     try {
-      const response = await api(`/reports/export.xlsx?${query()}`);
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(await response.blob());
-      link.download = "teacher_report.xlsx";
-      link.click();
-      URL.revokeObjectURL(link.href);
+      await downloadResponse(
+        `/reports/export.xlsx?${query()}`,
+        "teacher_report.xlsx",
+      );
     } catch (error) {
       showToast(error.message, true);
     }
   });
   $("#workspace-filters").append(form);
+  $("#workspace-form-region").append(results);
   form.requestSubmit();
 }
 
@@ -815,7 +1542,10 @@ async function renderAccounts() {
     ["Tổng tài khoản", users.length],
     ["Đang hoạt động", activeUsers.length],
     ["Đã khóa", users.length - activeUsers.length],
-    ["Quản trị viên", activeUsers.filter((user) => user.role === "admin").length],
+    [
+      "Quản trị viên",
+      activeUsers.filter((user) => user.role === "admin").length,
+    ],
   ].forEach(([label, value]) => {
     const card = makeElement("article", "stat-card account-stat-card");
     card.append(
@@ -829,10 +1559,18 @@ async function renderAccounts() {
   const createForm = document.createElement("form");
   createForm.className = "inline-form admin-account-form";
   createForm.append(makeElement("strong", "", "Tạo tài khoản"));
-  const username = inputField({ name: "username", label: "Tên tài khoản", required: true });
+  const username = inputField({
+    name: "username",
+    label: "Tên tài khoản",
+    required: true,
+  });
   username.querySelector("input").maxLength = 80;
   username.querySelector("input").autocomplete = "off";
-  const fullName = inputField({ name: "full_name", label: "Họ tên", required: true });
+  const fullName = inputField({
+    name: "full_name",
+    label: "Họ tên",
+    required: true,
+  });
   fullName.querySelector("input").maxLength = 160;
   const password = inputField({
     name: "password",
@@ -856,7 +1594,11 @@ async function renderAccounts() {
   });
   createForm.append(username, fullName, password, role);
   addPasswordToggle(password.querySelector("input"));
-  const createButton = makeElement("button", "button button-primary", "Tạo tài khoản");
+  const createButton = makeElement(
+    "button",
+    "button button-primary",
+    "Tạo tài khoản",
+  );
   createButton.type = "submit";
   createForm.append(createButton);
   createForm.addEventListener("submit", async (event) => {
@@ -902,20 +1644,32 @@ async function renderAccounts() {
   $("#workspace-filters").append(search, roleFilter, statusFilter);
   const drawRows = () => {
     const query = search.value.trim().toLocaleLowerCase("vi");
-    const filtered = users.filter((user) =>
-      `${user.username} ${user.full_name} ${roleLabels[user.role] || user.role}`
-        .toLocaleLowerCase("vi")
-        .includes(query)
-      && (!roleFilter.value || user.role === roleFilter.value)
-      && (!statusFilter.value || user.is_active === (statusFilter.value === "active")),
+    const filtered = users.filter(
+      (user) =>
+        `${user.username} ${user.full_name} ${roleLabels[user.role] || user.role}`
+          .toLocaleLowerCase("vi")
+          .includes(query) &&
+        (!roleFilter.value || user.role === roleFilter.value) &&
+        (!statusFilter.value ||
+          user.is_active === (statusFilter.value === "active")),
     );
     setTable(
-      ["Tên tài khoản", "Họ tên", "Vai trò", "Trạng thái", "Tạo lúc", "Thao tác"],
+      [
+        "Tên tài khoản",
+        "Họ tên",
+        "Vai trò",
+        "Trạng thái",
+        "Tạo lúc",
+        "Thao tác",
+      ],
       filtered.map((user) => [
         user.username,
         user.full_name,
         roleLabels[user.role] || user.role,
-        user.is_active ? "Đang hoạt động" : "Đã khóa",
+        badge(
+          user.is_active ? "active" : "ended",
+          user.is_active ? "Đang hoạt động" : "Đã khóa",
+        ),
         new Date(user.created_at).toLocaleString("vi-VN"),
         makeAccountActions(user),
       ]),
@@ -935,7 +1689,8 @@ function openAccountModal(user) {
   form.elements.username.value = user.username;
   form.elements.full_name.value = user.full_name;
   form.elements.role.value = user.role;
-  $("#account-modal-title").textContent = `Chỉnh sửa tài khoản ${user.username}`;
+  $("#account-modal-title").textContent =
+    `Chỉnh sửa tài khoản ${user.username}`;
   $("#account-backdrop").classList.remove("hidden");
 }
 
@@ -963,17 +1718,36 @@ function makeAccountActions(user) {
     toggle.disabled = true;
     toggle.title = "Bạn không thể tự khóa tài khoản đang đăng nhập.";
   }
-  return actionGroup([edit, toggle]);
+  const reset = actionButton("Đặt lại mật khẩu", "reset-password", user.id);
+  if (user.id === state.user.id) {
+    reset.disabled = true;
+    reset.title = "Dùng chức năng Đổi mật khẩu cho tài khoản của bạn.";
+  }
+  return actionGroup([edit, reset, toggle]);
 }
 
 async function renderAudit() {
-  const actorId = inputField({ name: "actor_id", label: "Tài khoản ID", type: "number" });
+  const actorId = inputField({
+    name: "actor_id",
+    label: "Tài khoản ID",
+    type: "number",
+  });
   const action = inputField({ name: "action", label: "Thao tác" });
-  const start = inputField({ name: "start_date", label: "Từ ngày", type: "date" });
+  const start = inputField({
+    name: "start_date",
+    label: "Từ ngày",
+    type: "date",
+  });
   const end = inputField({ name: "end_date", label: "Đến ngày", type: "date" });
   const form = document.createElement("form");
   form.className = "inline-form";
-  form.append(makeElement("strong", "", "Lọc nhật ký"), actorId, action, start, end);
+  form.append(
+    makeElement("strong", "", "Lọc nhật ký"),
+    actorId,
+    action,
+    start,
+    end,
+  );
   const submit = makeElement("button", "button button-primary", "Tìm kiếm");
   submit.type = "submit";
   form.append(submit);
@@ -991,7 +1765,15 @@ async function renderAudit() {
     try {
       const entries = await api(`/audit-logs?${params}`);
       setTable(
-        ["Thời gian", "Tài khoản ID", "Thao tác", "Đối tượng", "ID", "Kết quả", "Chi tiết"],
+        [
+          "Thời gian",
+          "Tài khoản ID",
+          "Thao tác",
+          "Đối tượng",
+          "ID",
+          "Kết quả",
+          "Chi tiết",
+        ],
         entries.map((item) => [
           new Date(item.created_at).toLocaleString("vi-VN"),
           item.actor_id || "—",
@@ -1001,6 +1783,7 @@ async function renderAudit() {
           item.outcome,
           JSON.stringify(item.details || {}),
         ]),
+        { pageSize: 20 },
       );
     } catch (error) {
       showToast(error.message, true);
@@ -1017,7 +1800,9 @@ function inputField(config) {
   if (config.type === "select") {
     input = document.createElement("select");
     input.append(new Option("Chọn", ""));
-    config.options.forEach(([value, label]) => input.add(new Option(label, value)));
+    config.options.forEach(([value, label]) =>
+      input.add(new Option(label, value)),
+    );
   } else {
     input = document.createElement("input");
     input.type = config.type || "text";
@@ -1066,7 +1851,9 @@ function buildForm(fields, title, onSubmit) {
 
 function populateDepartmentSelect(select, selectedValue = "") {
   select.replaceChildren(new Option("Chọn đơn vị", ""));
-  state.departments.filter((item) => item.is_active).forEach((item) => select.add(new Option(item.name, String(item.id))));
+  state.departments
+    .filter((item) => item.is_active)
+    .forEach((item) => select.add(new Option(item.name, String(item.id))));
   select.value = selectedValue ? String(selectedValue) : "";
 }
 
@@ -1076,19 +1863,33 @@ function openTeacherModal(teacher = null) {
   clearError($("#form-error"));
   const departmentSelect = form.elements.department_id;
   populateDepartmentSelect(departmentSelect, teacher?.department_id);
-  $("#modal-title").textContent = teacher ? "Chỉnh sửa hồ sơ" : "Thêm giảng viên";
+  $("#modal-title").textContent = teacher
+    ? "Chỉnh sửa hồ sơ"
+    : "Thêm giảng viên";
   $("#teacher-submit").textContent = teacher ? "Lưu thay đổi" : "Lưu hồ sơ";
   form.elements.teacher_id.value = teacher?.id || "";
   if (teacher) {
     for (const [key, value] of Object.entries(teacher)) {
       if (form.elements[key]) form.elements[key].value = value ?? "";
     }
-    for (const key of ["department_id", "employment_status", "academic_degree", "academic_title"]) {
+    for (const key of [
+      "department_id",
+      "employment_status",
+      "academic_degree",
+      "academic_title",
+    ]) {
       form.elements[key].disabled = true;
     }
-    showToast("Đơn vị, trạng thái, trình độ và chức danh chỉ đổi qua yêu cầu phê duyệt.");
+    showToast(
+      "Đơn vị, trạng thái, trình độ và chức danh chỉ đổi qua yêu cầu phê duyệt.",
+    );
   } else {
-    for (const key of ["department_id", "employment_status", "academic_degree", "academic_title"]) {
+    for (const key of [
+      "department_id",
+      "employment_status",
+      "academic_degree",
+      "academic_title",
+    ]) {
       form.elements[key].disabled = false;
     }
   }
@@ -1105,10 +1906,13 @@ function openDepartmentModal(department = null) {
   form.reset();
   clearError($("#department-form-error"));
   form.elements.department_id.value = department?.id || "";
-  $("#department-modal-title").textContent = department ? "Chỉnh sửa đơn vị" : "Thêm đơn vị";
+  $("#department-modal-title").textContent = department
+    ? "Chỉnh sửa đơn vị"
+    : "Thêm đơn vị";
   const parent = form.elements.parent_id;
   parent.replaceChildren(new Option("Không có", ""));
-  state.departments.filter((item) => item.is_active && item.id !== department?.id)
+  state.departments
+    .filter((item) => item.is_active && item.id !== department?.id)
     .forEach((item) => parent.add(new Option(item.name, String(item.id))));
   if (department) {
     for (const [key, value] of Object.entries(department)) {
@@ -1129,7 +1933,10 @@ function bindEvents() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ username: data.get("username"), password: data.get("password") }),
+        body: JSON.stringify({
+          username: data.get("username"),
+          password: data.get("password"),
+        }),
       });
       const user = await response.json();
       if (!response.ok) throw new Error(user.detail || "Không thể đăng nhập.");
@@ -1182,8 +1989,12 @@ function bindEvents() {
       showError($("#password-error"), error.message);
     }
   });
-  $$(".nav-link").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
-  $("#mobile-menu").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
+  $$(".nav-link").forEach((button) =>
+    button.addEventListener("click", () => navigate(button.dataset.view)),
+  );
+  $("#mobile-menu").addEventListener("click", () =>
+    $("#sidebar").classList.toggle("open"),
+  );
   $("#teacher-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1211,7 +2022,11 @@ function bindEvents() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const id = data.get("department_id");
-    const payload = Object.fromEntries([...data.entries()].filter(([key, value]) => key !== "department_id" && value !== ""));
+    const payload = Object.fromEntries(
+      [...data.entries()].filter(
+        ([key, value]) => key !== "department_id" && value !== "",
+      ),
+    );
     if (payload.parent_id) payload.parent_id = Number(payload.parent_id);
     try {
       await api(id ? `/departments/${id}` : "/departments", {
@@ -1245,8 +2060,12 @@ function bindEvents() {
       showError($("#account-form-error"), error.message);
     }
   });
-  $("#department-modal-close").addEventListener("click", () => $("#department-backdrop").classList.add("hidden"));
-  $("#department-modal-cancel").addEventListener("click", () => $("#department-backdrop").classList.add("hidden"));
+  $("#department-modal-close").addEventListener("click", () =>
+    $("#department-backdrop").classList.add("hidden"),
+  );
+  $("#department-modal-cancel").addEventListener("click", () =>
+    $("#department-backdrop").classList.add("hidden"),
+  );
 
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-action]");
@@ -1323,7 +2142,10 @@ function bindEvents() {
           await api(`/change-requests/${id}/decision`, {
             method: "POST",
             body: JSON.stringify({
-              action: button.dataset.action === "reject-change" ? "reject" : "request_info",
+              action:
+                button.dataset.action === "reject-change"
+                  ? "reject"
+                  : "request_info",
               reason,
             }),
           });
@@ -1360,8 +2182,15 @@ function bindEvents() {
             "Phân loại: required, conditional hoặc optional",
             item?.classification || "conditional",
           );
-          if (!classification || !["required", "conditional", "optional"].includes(classification)) break;
-          const applicability = window.prompt("Điều kiện áp dụng", item?.applicability || "");
+          if (
+            !classification ||
+            !["required", "conditional", "optional"].includes(classification)
+          )
+            break;
+          const applicability = window.prompt(
+            "Điều kiện áp dụng",
+            item?.applicability || "",
+          );
           if (applicability === null) break;
           await api(`/checklist-items/${id}`, {
             method: "PATCH",
@@ -1384,11 +2213,14 @@ function bindEvents() {
           const user = state.users.find((entry) => entry.id === id);
           if (!user) throw new Error("Không tìm thấy tài khoản cần cập nhật.");
           if (
-            user.is_active
-            && !window.confirm(`Khóa tài khoản "${user.username}"?`)
-          ) break;
+            user.is_active &&
+            !window.confirm(`Khóa tài khoản "${user.username}"?`)
+          )
+            break;
           await updateAccount(id, { is_active: !user.is_active });
-          showToast(user.is_active ? "Đã khóa tài khoản." : "Đã mở khóa tài khoản.");
+          showToast(
+            user.is_active ? "Đã khóa tài khoản." : "Đã mở khóa tài khoản.",
+          );
           break;
         }
         case "edit-account": {
@@ -1406,13 +2238,485 @@ function bindEvents() {
   });
 }
 
+const qualificationTypeLabels = {
+  degree: "Bằng cấp",
+  certificate: "Chứng chỉ",
+  research: "Nghiên cứu",
+  other: "Khác",
+};
+const detailTabs = [
+  ["info", "Thông tin"],
+  ["quals", "Bằng cấp"],
+  ["contracts", "Hợp đồng"],
+  ["history", "Quá trình công tác"],
+  ["docs", "Tài liệu"],
+  ["completeness", "Hồ sơ còn thiếu"],
+];
+
+function detailButton(label, action, icon, id, primary = false) {
+  const button = headerButton(label, action, icon, primary);
+  button.dataset.id = String(id);
+  return button;
+}
+
+async function renderTeacherDetail() {
+  const teacher = state.teachers.find(
+    (item) => String(item.id) === String(state.selectedTeacherId),
+  );
+  if (!teacher) {
+    navigate("teachers");
+    return;
+  }
+  $("#detail-title").textContent = teacher.full_name;
+  $("#detail-subtitle").textContent =
+    `${teacher.employee_code} · ${departmentName(teacher.department_id)}`;
+  $("#detail-actions").replaceChildren(
+    detailButton("Danh sách", "detail-back", "chev", teacher.id, false),
+    detailButton("Sửa hồ sơ", "edit-teacher", "check", teacher.id, true),
+    detailButton("Checklist", "teacher-checklist", "list", teacher.id, false),
+    detailButton("Xóa hồ sơ", "delete-teacher", "trash", teacher.id, false),
+  );
+  const tabs = $("#detail-tabs");
+  tabs.replaceChildren();
+  for (const [key, label] of detailTabs) {
+    const tab = makeElement(
+      "button",
+      `tab${state.detailTab === key ? " active" : ""}`,
+      label,
+    );
+    tab.type = "button";
+    tab.dataset.action = "detail-tab";
+    tab.dataset.tab = key;
+    tab.setAttribute("role", "tab");
+    tabs.append(tab);
+  }
+  await drawDetailTab(teacher);
+}
+
+async function drawDetailTab(teacher) {
+  const body = $("#detail-body");
+  body.replaceChildren();
+  const id = teacher.id;
+  if (state.detailTab === "info") {
+    const list = makeElement("dl", "info-grid");
+    const fields = [
+      ["Mã giảng viên", teacher.employee_code],
+      ["Họ và tên", teacher.full_name],
+      ["Đơn vị công tác", departmentName(teacher.department_id)],
+      ["Trạng thái", badge(teacher.employment_status)],
+      ["Ngày sinh", teacher.date_of_birth],
+      ["Giới tính", teacher.gender],
+      ["Email", teacher.email],
+      ["Số điện thoại", teacher.phone],
+      ["Trình độ", teacher.academic_degree],
+      ["Chức danh", teacher.academic_title],
+      ["Địa chỉ liên hệ", teacher.address],
+    ];
+    for (const [label, value] of fields) {
+      const row = document.createElement("div");
+      const term = makeElement("dt", "", label);
+      const detail = document.createElement("dd");
+      if (value instanceof Node) detail.append(value);
+      else detail.textContent = value || "—";
+      row.append(term, detail);
+      list.append(row);
+    }
+    body.append(list);
+  } else if (state.detailTab === "quals") {
+    const items = await api(`/teachers/${id}/qualifications`);
+    body.append(
+      buildTable(
+        ["Loại", "Tên", "Chuyên ngành", "Cơ sở đào tạo", "Năm"],
+        items.map((item) => [
+          qualificationTypeLabels[item.qualification_type] ||
+            item.qualification_type,
+          item.title,
+          item.specialty,
+          item.institution,
+          item.issued_year || item.issued_on,
+        ]),
+        "Chưa có bằng cấp hoặc chứng chỉ.",
+      ),
+    );
+  } else if (state.detailTab === "contracts") {
+    const items = await api(`/teachers/${id}/contracts`);
+    body.append(
+      buildTable(
+        ["Mã hợp đồng", "Loại", "Bắt đầu", "Kết thúc", "Trạng thái"],
+        items.map((item) => [
+          item.contract_code,
+          item.contract_type,
+          item.starts_on,
+          item.ends_on || "Không thời hạn",
+          badge(item.display_status),
+        ]),
+        "Chưa có hợp đồng.",
+      ),
+    );
+  } else if (state.detailTab === "history") {
+    body.append(buildTimeline(await api(`/teachers/${id}/work-history`)));
+  } else if (state.detailTab === "docs") {
+    const items = await api(`/teachers/${id}/documents`);
+    body.append(
+      buildTable(
+        ["Tài liệu", "Dung lượng", "Ngày tải", "Tải xuống"],
+        items.map((item) => [
+          item.original_name,
+          `${Math.ceil(item.size_bytes / 1024)} KB`,
+          new Date(item.created_at).toLocaleString("vi-VN"),
+          actionButton("Tải tệp", "download-document", item.id),
+        ]),
+        "Chưa có tài liệu minh chứng.",
+      ),
+    );
+  } else {
+    const result = await api(`/teachers/${id}/completeness`);
+    if (result.is_complete) {
+      body.append(
+        makeElement(
+          "p",
+          "empty-state",
+          "Hồ sơ đã đầy đủ theo các yêu cầu đã rà soát.",
+        ),
+      );
+    } else {
+      const list = makeElement("ul", "check-list");
+      result.missing.forEach((item) =>
+        list.append(makeElement("li", "", `Còn thiếu: ${item}`)),
+      );
+      result.needs_review.forEach((item) =>
+        list.append(makeElement("li", "", `Cần rà soát điều kiện: ${item}`)),
+      );
+      body.append(list);
+    }
+  }
+}
+
+const seenKey = () => `neu-notifications-${state.user?.id}`;
+function seenIds() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(seenKey()) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+function saveSeen(ids) {
+  try {
+    localStorage.setItem(seenKey(), JSON.stringify([...ids].slice(-200)));
+  } catch {
+    /* lưu trữ cục bộ không khả dụng */
+  }
+}
+
+async function loadNotifications() {
+  if (!state.user) return;
+  try {
+    state.notifications = await api("/notifications");
+  } catch {
+    state.notifications = [];
+  }
+  drawNotifications();
+}
+
+function drawNotifications() {
+  if (!state.user) return;
+  const seen = seenIds();
+  const list = $("#notif-list");
+  list.replaceChildren();
+  const unread = state.notifications.filter(
+    (item) => !seen.has(item.id),
+  ).length;
+  const counter = $("#notif-count");
+  counter.textContent = unread > 9 ? "9+" : String(unread);
+  counter.classList.toggle("hidden", unread === 0);
+  if (!state.notifications.length) {
+    list.append(makeElement("div", "notif-empty", "Chưa có thông báo mới."));
+    return;
+  }
+  for (const item of state.notifications) {
+    const entry = makeElement(
+      "button",
+      `notif-item${seen.has(item.id) ? "" : " unread"}`,
+    );
+    entry.type = "button";
+    entry.dataset.action = "notif-open";
+    entry.dataset.view = item.view;
+    entry.dataset.notif = item.id;
+    entry.append(
+      makeElement("strong", "", item.title),
+      makeElement("span", "", item.message),
+    );
+    list.append(entry);
+  }
+}
+
+function startNotifications() {
+  stopNotifications();
+  loadNotifications();
+  state.notifTimer = window.setInterval(loadNotifications, 60000);
+}
+
+function stopNotifications() {
+  if (state.notifTimer) window.clearInterval(state.notifTimer);
+  state.notifTimer = null;
+  state.notifications = [];
+}
+
+function applyTheme() {
+  try {
+    const saved = localStorage.getItem("neu-theme");
+    if (saved) document.documentElement.dataset.theme = saved;
+  } catch {
+    /* bỏ qua */
+  }
+}
+
+function toggleTheme() {
+  const root = document.documentElement;
+  const dark = root.dataset.theme
+    ? root.dataset.theme === "dark"
+    : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try {
+    localStorage.setItem("neu-theme", root.dataset.theme);
+  } catch {
+    /* bỏ qua */
+  }
+}
+
+let confirmHandler = null;
+function openConfirm({ title, message, label = "Xóa", onConfirm }) {
+  $("#confirm-title").textContent = title;
+  $("#confirm-message").textContent = message;
+  $("#confirm-ok").textContent = label;
+  confirmHandler = onConfirm;
+  $("#confirm-backdrop").classList.remove("hidden");
+}
+function closeConfirm() {
+  confirmHandler = null;
+  $("#confirm-backdrop").classList.add("hidden");
+}
+
+const DELETE_NOTICE =
+  "Chức năng xóa chưa được kích hoạt trong phiên bản này. Dữ liệu có lịch sử được bảo toàn; hãy dùng thao tác Ngừng hoạt động hoặc đổi trạng thái công tác.";
+
+function bindNewEvents() {
+  const closeMenus = () => {
+    $("#notif-panel").classList.add("hidden");
+    $("#user-panel").classList.add("hidden");
+  };
+  const toggleMenu = (panelId) => {
+    const panel = $(panelId);
+    const willOpen = panel.classList.contains("hidden");
+    closeMenus();
+    panel.classList.toggle("hidden", !willOpen);
+    return willOpen;
+  };
+  $("#notif-button").addEventListener("click", () => {
+    if (toggleMenu("#notif-panel")) loadNotifications();
+  });
+  $("#user-button").addEventListener("click", () => toggleMenu("#user-panel"));
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("#notif-button, #user-button, #notif-panel"))
+      closeMenus();
+  });
+  $("#notif-read").addEventListener("click", () => {
+    const seen = seenIds();
+    state.notifications.forEach((item) => seen.add(item.id));
+    saveSeen(seen);
+    drawNotifications();
+  });
+  $("#scrim").addEventListener("click", () =>
+    $("#sidebar").classList.remove("open"),
+  );
+  $("#theme-fab").addEventListener("click", toggleTheme);
+
+  const closeReset = () => {
+    $("#reset-backdrop").classList.add("hidden");
+    $("#reset-form").reset();
+  };
+  $("#reset-close").addEventListener("click", closeReset);
+  $("#reset-cancel").addEventListener("click", closeReset);
+  $("#reset-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    clearError($("#reset-error"));
+    try {
+      await api(`/users/${form.elements.user_id.value}/reset-password`, {
+        method: "POST",
+        body: JSON.stringify({
+          new_password: form.elements.new_password.value,
+        }),
+      });
+      resetPasswordToggles(form);
+      closeReset();
+      showToast("Đã đặt lại mật khẩu. Người dùng cần đăng nhập lại.");
+    } catch (error) {
+      showError($("#reset-error"), error.message);
+    }
+  });
+
+  const closeImport = () => {
+    $("#import-backdrop").classList.add("hidden");
+    $("#import-form").reset();
+    $("#import-result").classList.add("hidden");
+    clearError($("#import-error"));
+  };
+  $("#import-close").addEventListener("click", closeImport);
+  $("#import-cancel").addEventListener("click", closeImport);
+  $("#import-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    clearError($("#import-error"));
+    try {
+      const result = await api("/teachers/import", {
+        method: "POST",
+        body: new FormData(form),
+      });
+      const box = $("#import-result");
+      box.replaceChildren(
+        makeElement(
+          "strong",
+          "",
+          `Đã nhập ${result.created} giảng viên, bỏ qua ${result.skipped} dòng.`,
+        ),
+      );
+      if (result.errors.length) {
+        const list = document.createElement("ul");
+        result.errors.forEach((item) =>
+          list.append(
+            makeElement("li", "", `Dòng ${item.row}: ${item.message}`),
+          ),
+        );
+        box.append(list);
+      }
+      box.classList.remove("hidden");
+      if (result.created) {
+        showToast(`Đã nhập ${result.created} giảng viên.`);
+        await renderWorkspace();
+      }
+    } catch (error) {
+      showError($("#import-error"), error.message);
+    }
+  });
+
+  $("#confirm-close").addEventListener("click", closeConfirm);
+  $("#confirm-cancel").addEventListener("click", closeConfirm);
+  $("#confirm-ok").addEventListener("click", () => {
+    const handler = confirmHandler;
+    closeConfirm();
+    handler?.();
+  });
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-action]");
+    if (!button) return;
+    const id = Number(button.dataset.id);
+    try {
+      switch (button.dataset.action) {
+        case "goto":
+          navigate(button.dataset.view);
+          break;
+        case "notif-open": {
+          const seen = seenIds();
+          seen.add(button.dataset.notif);
+          saveSeen(seen);
+          drawNotifications();
+          closeMenus();
+          navigate(button.dataset.view);
+          break;
+        }
+        case "page-prev":
+          state.table.page -= 1;
+          drawTablePage();
+          break;
+        case "page-next":
+          state.table.page += 1;
+          drawTablePage();
+          break;
+        case "teacher-open":
+          state.selectedTeacherId = String(id);
+          state.detailTab = "info";
+          navigate("teacherDetail");
+          break;
+        case "detail-back":
+          navigate("teachers");
+          break;
+        case "detail-tab": {
+          state.detailTab = button.dataset.tab;
+          const teacher = state.teachers.find(
+            (item) => String(item.id) === String(state.selectedTeacherId),
+          );
+          $$(".tab").forEach((tab) =>
+            tab.classList.toggle("active", tab.dataset.tab === state.detailTab),
+          );
+          if (teacher) await drawDetailTab(teacher);
+          break;
+        }
+        case "export-teachers":
+          await downloadResponse(
+            `/teachers/export.xlsx?${state.teacherQuery}`,
+            "danh_sach_giang_vien.xlsx",
+          );
+          break;
+        case "download-template":
+          await downloadResponse(
+            "/teachers/import-template.xlsx",
+            "mau_nhap_giang_vien.xlsx",
+          );
+          break;
+        case "import-teachers":
+          $("#import-backdrop").classList.remove("hidden");
+          break;
+        case "reset-password": {
+          const user = state.users.find((entry) => entry.id === id);
+          if (!user) throw new Error("Không tìm thấy tài khoản.");
+          $("#reset-form").elements.user_id.value = String(id);
+          $("#reset-note").textContent =
+            `Đặt mật khẩu mới cho tài khoản "${user.username}". Mọi phiên đăng nhập hiện tại của tài khoản này sẽ bị đăng xuất.`;
+          clearError($("#reset-error"));
+          $("#reset-backdrop").classList.remove("hidden");
+          break;
+        }
+        case "delete-teacher": {
+          const teacher = state.teachers.find((item) => item.id === id);
+          openConfirm({
+            title: "Xóa hồ sơ giảng viên",
+            message: `Bạn có chắc muốn xóa hồ sơ ${teacher ? `${teacher.full_name} (${teacher.employee_code})` : "này"}?`,
+            onConfirm: () => showToast(DELETE_NOTICE),
+          });
+          break;
+        }
+        case "delete-department": {
+          const unit = state.departments.find((item) => item.id === id);
+          openConfirm({
+            title: "Xóa đơn vị",
+            message: `Bạn có chắc muốn xóa đơn vị ${unit ? `"${unit.name}"` : "này"}?`,
+            onConfirm: () => showToast(DELETE_NOTICE),
+          });
+          break;
+        }
+        default:
+          break;
+      }
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+}
+
 async function initialize() {
   $("#today-date").textContent = new Date().toLocaleDateString("vi-VN", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
   });
   $("#footer-year").textContent = String(new Date().getFullYear());
   $$('input[type="password"]').forEach(addPasswordToggle);
   bindEvents();
+  bindNewEvents();
+  applyTheme();
   try {
     const user = await api("/auth/session");
     showApp(user);
