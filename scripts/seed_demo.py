@@ -28,6 +28,7 @@ DEMO_ACCOUNTS = (
     ("manager_demo2", "Người quản lý demo 2", "manager", False),
     ("hr_demolocked", "Tài khoản nhân sự demo đã khóa", "hr", True),
 )
+DEMO_LECTURER_ACCOUNTS = (("lecturer_demo1", "DEMO-GV-001"),)
 DEGREES = ("Cử nhân", "Thạc sĩ", "Tiến sĩ", "Phó giáo sư")
 TITLES = ("Trợ giảng", "Giảng viên", "Giảng viên chính")
 FICTIONAL_NAMES = (
@@ -346,6 +347,57 @@ def ensure_teachers(api: Api, specs: list[dict[str, Any]]) -> dict[str, dict[str
         teachers[code] = teacher
     print(f"  Hồ sơ giảng viên: tạo {created}, đã có {existing}.")
     return teachers
+
+
+def ensure_lecturer_accounts(
+    api: Api,
+    teachers: dict[str, dict[str, Any]],
+    passwords: dict[str, str],
+) -> None:
+    existing_users = {
+        user["username"]: user for user in api.request("GET", "/users").json()
+    }
+    for username, employee_code in DEMO_LECTURER_ACCOUNTS:
+        teacher = teachers[employee_code]
+        full_name = teacher["full_name"]
+        password = new_demo_password()
+        user = existing_users.get(username)
+        if user is None:
+            user = api.request(
+                "POST",
+                "/users",
+                json={
+                    "username": username,
+                    "full_name": full_name,
+                    "password": password,
+                    "role": "lecturer",
+                    "teacher_id": teacher["id"],
+                },
+            ).json()
+            print(f"  Đã tạo tài khoản demo: {username} (lecturer).")
+        else:
+            changes: dict[str, Any] = {}
+            if user["full_name"] != full_name:
+                changes["full_name"] = full_name
+            if user["role"] != "lecturer":
+                changes["role"] = "lecturer"
+            if user["teacher_id"] != teacher["id"]:
+                changes["teacher_id"] = teacher["id"]
+            if changes:
+                user = api.request(
+                    "PATCH", f"/users/{user['id']}", json=changes
+                ).json()
+            api.request(
+                "POST",
+                f"/users/{user['id']}/reset-password",
+                json={"new_password": password},
+            )
+            print(f"  Tài khoản demo đã có, đã đặt lại mật khẩu: {username}.")
+        if not user["is_active"]:
+            api.request(
+                "PATCH", f"/users/{user['id']}", json={"is_active": True}
+            )
+        passwords[username] = password
 
 
 def ensure_qualifications(
@@ -869,6 +921,7 @@ def main() -> int:
 
     admin_user, admin_password = admin_credentials()
     admin_passwords: dict[str, str] = {}
+    lecturer_passwords: dict[str, str] = {}
     with httpx.Client(base_url=base_url, timeout=60) as admin_client:
         admin_api = Api(admin_client)
         admin_api.login(admin_user, admin_password)
@@ -936,6 +989,14 @@ def main() -> int:
         print("Nhóm hồ sơ giảng viên:")
         specs = teacher_specs(units)
         teachers = ensure_teachers(hr_api, specs)
+
+        print("Nhóm tài khoản giảng viên:")
+        with httpx.Client(base_url=base_url, timeout=60) as lecturer_admin_client:
+            lecturer_admin_api = Api(lecturer_admin_client)
+            lecturer_admin_api.login(admin_user, admin_password)
+            ensure_lecturer_accounts(
+                lecturer_admin_api, teachers, lecturer_passwords
+            )
 
         print("Nhóm bằng cấp và chứng chỉ:")
         qualifications = ensure_qualifications(hr_api, teachers)
@@ -1045,6 +1106,13 @@ def main() -> int:
         suffix = " (đã khóa)" if is_locked else ""
         print(f"  {username} | {full_name} | {role}{suffix}")
         print(f"    Mật khẩu: {admin_passwords[username]}")
+    for username, employee_code in DEMO_LECTURER_ACCOUNTS:
+        teacher = teachers[employee_code]
+        print(
+            f"  {username} | {teacher['full_name']} | lecturer "
+            f"({employee_code})"
+        )
+        print(f"    Mật khẩu: {lecturer_passwords[username]}")
     return 0
 
 

@@ -1,8 +1,9 @@
 import re
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import date, timedelta
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from openpyxl import load_workbook
 from app.main import create_app
 from app.models import User
 from app.security import SESSION_COOKIE, hash_password
+from scripts.seed_demo import Api, ensure_lecturer_accounts
 
 
 class TeacherManagementApiTests(unittest.TestCase):
@@ -366,6 +368,36 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertTrue(
             self.client.get(f"/teachers/{teacher_id}/completeness").json()["is_complete"]
         )
+
+    def test_demo_lecturer_seed_account_matches_existing_teacher(self) -> None:
+        teacher_response = self.create_teacher(
+            "DEMO-GV-001", full_name="Nguyễn An Bình"
+        )
+        self.assertEqual(teacher_response.status_code, 201, teacher_response.text)
+        teacher = teacher_response.json()
+
+        admin = self.login("admin")
+        seed_api = Api(self.client)
+        seed_api.csrf_token = str(admin["csrf_token"])
+        passwords: dict[str, str] = {}
+        with redirect_stdout(StringIO()):
+            ensure_lecturer_accounts(seed_api, {"DEMO-GV-001": teacher}, passwords)
+            ensure_lecturer_accounts(seed_api, {"DEMO-GV-001": teacher}, passwords)
+        seeded_accounts = [
+            user
+            for user in seed_api.request("GET", "/users").json()
+            if user["username"] == "lecturer_demo1"
+        ]
+        self.assertEqual(len(seeded_accounts), 1)
+        self.assertEqual(seeded_accounts[0]["teacher_id"], teacher["id"])
+
+        lecturer = self.login("lecturer_demo1", passwords["lecturer_demo1"])
+        self.assertEqual(lecturer["role"], "lecturer")
+        self.assertEqual(lecturer["teacher_id"], teacher["id"])
+        profile = self.client.get("/lecturer/profile")
+        self.assertEqual(profile.status_code, 200, profile.text)
+        self.assertEqual(profile.json()["employee_code"], "DEMO-GV-001")
+        self.assertEqual(profile.json()["full_name"], "Nguyễn An Bình")
 
     def test_account_access_changes_revoke_all_existing_sessions(self) -> None:
         def sign_in(username: str) -> tuple[dict[str, object], str]:
