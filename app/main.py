@@ -26,9 +26,17 @@ from sqlalchemy import func, or_, select, update
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.audit import record_audit
 from app.database import DATABASE_URL, create_database, migrate_database
+from app.document_analysis import (
+    DocumentAnalysisError,
+    DocumentAnalysisRead,
+    analyze_document_text,
+    extract_document_text,
+    is_valid_docx_file,
+)
 from app.models import (
     AppSetting,
     AuditLog,
@@ -103,6 +111,10 @@ UPLOAD_DIR = Path(
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_UPLOADS = {
     ".pdf": ("application/pdf", lambda data: data.startswith(b"%PDF-")),
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        is_valid_docx_file,
+    ),
     ".png": ("image/png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
     ".jpg": ("image/jpeg", lambda data: data.startswith(b"\xff\xd8\xff")),
     ".jpeg": ("image/jpeg", lambda data: data.startswith(b"\xff\xd8\xff")),
@@ -1026,7 +1038,10 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         extension = Path(original_name).suffix.lower()
         file_spec = ALLOWED_UPLOADS.get(extension)
         if file_spec is None:
-            raise HTTPException(status_code=415, detail="Only PDF, PNG, and JPEG files are allowed.")
+            raise HTTPException(
+                status_code=415,
+                detail="Only PDF, DOCX, PNG, and JPEG files are allowed.",
+            )
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         if not content or len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="File is empty or exceeds the 10 MB limit.")
@@ -1092,6 +1107,61 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    @application.post(
+        "/documents/{document_id}/analysis",
+        response_model=DocumentAnalysisRead,
+        tags=["documents"],
+    )
+    async def analyze_uploaded_document(
+        document_id: int,
+        db: DbSession,
+        actor: HR_USER,
+    ) -> DocumentAnalysisRead:
+        document = db.get(EvidenceDocument, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        if Path(document.original_name).suffix.lower() not in {".pdf", ".docx"}:
+            raise HTTPException(
+                status_code=415,
+                detail="AI analysis supports text-based PDF and DOCX files only.",
+            )
+        path = application.state.upload_dir / document.stored_name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Stored document is missing.")
+        try:
+            text = await run_in_threadpool(extract_document_text, path)
+            result = await analyze_document_text(text)
+        except DocumentAnalysisError as error:
+            record_audit(
+                db,
+                actor,
+                "document_analysis_requested",
+                "document",
+                document.id,
+                outcome="failure",
+                details={"error": error.code},
+            )
+            db.commit()
+            status_code = (
+                502
+                if error.code == "invalid_model_response"
+                else 503
+                if error.code.startswith("ollama_")
+                or error.code in {"missing_ollama_model", "invalid_ollama_url"}
+                else 422
+            )
+            raise HTTPException(status_code=status_code, detail=str(error)) from error
+        record_audit(
+            db,
+            actor,
+            "document_analysis_requested",
+            "document",
+            document.id,
+            details={"format": path.suffix.lower()},
+        )
+        db.commit()
+        return result
 
     @application.patch(
         "/documents/{document_id}/review",

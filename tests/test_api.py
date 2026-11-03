@@ -5,13 +5,14 @@ from contextlib import redirect_stdout
 from datetime import date, timedelta
 from io import BytesIO, StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from sqlalchemy import select
 
 from app.main import create_app
-from app.models import User
+from app.models import AuditLog, EvidenceDocument, User
 from app.security import SESSION_COOKIE, hash_password
 from scripts.seed_demo import Api, ensure_lecturer_accounts
 
@@ -633,6 +634,78 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertEqual(alerts.json()[0]["status"], "expiring")
         contract_list = self.client.get(f"/teachers/{teacher_id}/contracts")
         self.assertEqual(contract_list.json()[0]["display_status"], "expiring")
+
+    def test_local_document_analysis_is_hr_only_and_does_not_change_review(self) -> None:
+        from docx import Document
+
+        teacher_id = self.create_teacher().json()["id"]
+        word_document = Document()
+        word_document.add_paragraph("Thông tin minh chứng")
+        word_content = BytesIO()
+        word_document.save(word_content)
+        upload = self.client.post(
+            f"/teachers/{teacher_id}/documents",
+            files={
+                "file": (
+                    "evidence.docx",
+                    word_content.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(upload.status_code, 201, upload.text)
+        document_id = upload.json()["id"]
+
+        manager = self.login("manager")
+        self.csrf = str(manager["csrf_token"])
+        self.assertEqual(
+            self.client.post(
+                f"/documents/{document_id}/analysis",
+                headers=self.headers(),
+            ).status_code,
+            403,
+        )
+
+        hr = self.login("hr")
+        self.csrf = str(hr["csrf_token"])
+        analysis = {
+            "summary": "Tóm tắt minh chứng",
+            "extracted_information": [
+                {
+                    "field": "Nội dung",
+                    "value": "Thông tin minh chứng",
+                    "source": "[Đoạn 1]",
+                }
+            ],
+        }
+        with (
+            patch("app.main.extract_document_text", return_value="verified text"),
+            patch(
+                "app.main.analyze_document_text",
+                new_callable=AsyncMock,
+                return_value=analysis,
+            ) as model_call,
+        ):
+            response = self.client.post(
+                f"/documents/{document_id}/analysis",
+                headers=self.headers(),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), analysis)
+        model_call.assert_awaited_once_with("verified text")
+        with self.client.app.state.session_factory() as db:
+            saved_document = db.get(EvidenceDocument, document_id)
+            self.assertEqual(saved_document.review_status, "approved")
+            audit = db.scalar(
+                select(AuditLog).where(
+                    AuditLog.action == "document_analysis_requested",
+                    AuditLog.entity_id == str(document_id),
+                )
+            )
+            self.assertIsNotNone(audit)
+            self.assertNotIn("Thông tin minh chứng", audit.details or "")
 
         invalid_contract = self.client.post(
             f"/teachers/{teacher_id}/contracts",

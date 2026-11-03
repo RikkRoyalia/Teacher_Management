@@ -909,10 +909,12 @@ async function renderLecturerPortal() {
     );
   checklistLabel.append(checklistSelect);
   const fileLabel = makeElement("label", "form-field");
-  fileLabel.append(makeElement("span", "", "Tệp PDF, PNG hoặc JPEG (tối đa 10 MB)"));
+  fileLabel.append(
+    makeElement("span", "", "Tệp PDF, DOCX, PNG hoặc JPEG (tối đa 10 MB)"),
+  );
   const file = document.createElement("input");
   file.type = "file";
-  file.accept = ".pdf,.png,.jpg,.jpeg";
+  file.accept = ".pdf,.docx,.png,.jpg,.jpeg";
   file.required = true;
   fileLabel.append(file);
   const submit = makeElement("button", "button button-primary", "Tải lên");
@@ -2477,8 +2479,12 @@ async function drawDetailTab(teacher) {
             ? [
                 actionGroup([
                   actionButton("Tải tệp", "download-document", item.id),
-                  ...(item.review_status === "pending"
-                    ? [
+                ...(item.original_name.toLowerCase().endsWith(".pdf") ||
+                item.original_name.toLowerCase().endsWith(".docx")
+                  ? [actionButton("AI đọc", "analyze-document", item.id)]
+                  : []),
+                ...(item.review_status === "pending"
+                  ? [
                         actionButton("Duyệt", "approve-document", item.id),
                         actionButton("Từ chối", "reject-document", item.id),
                       ]
@@ -2490,6 +2496,19 @@ async function drawDetailTab(teacher) {
         "Chưa có tài liệu minh chứng.",
       ),
     );
+    if (isHr) {
+      const analysisPanel = makeElement("section", "panel hidden");
+      analysisPanel.dataset.documentAnalysis = "true";
+      analysisPanel.setAttribute("aria-live", "polite");
+      body.append(
+        makeElement(
+          "p",
+          "page-subtitle",
+          "AI chạy cục bộ để hỗ trợ đọc PDF có văn bản và DOCX. Kết quả chỉ là gợi ý, cần đối chiếu với tài liệu gốc; AI không xác minh văn bằng hoặc cập nhật hồ sơ.",
+        ),
+        analysisPanel,
+      );
+    }
     if (isHr) {
       const [checklist, qualifications, contracts] = await Promise.all([
         api("/checklist-items"),
@@ -2504,7 +2523,7 @@ async function drawDetailTab(teacher) {
       const file = document.createElement("input");
       file.type = "file";
       file.name = "file";
-      file.accept = ".pdf,.png,.jpg,.jpeg";
+      file.accept = ".pdf,.docx,.png,.jpg,.jpeg";
       file.required = true;
       fileLabel.append(file);
       form.append(fileLabel);
@@ -2994,6 +3013,53 @@ function bindNewEvents() {
             tab.classList.toggle("active", tab.dataset.tab === state.detailTab),
           );
           if (teacher) await drawDetailTab(teacher);
+          break;
+        }
+        case "analyze-document": {
+          const panel = $("[data-document-analysis]");
+          if (!panel) throw new Error("Không tìm thấy vùng hiển thị kết quả AI.");
+          button.disabled = true;
+          button.textContent = "Đang đọc…";
+          panel.classList.remove("hidden");
+          panel.replaceChildren(
+            makeElement("p", "page-subtitle", "Đang phân tích tài liệu bằng Ollama cục bộ…"),
+          );
+          try {
+            const result = await api(`/documents/${id}/analysis`, {
+              method: "POST",
+            });
+            const heading = makeElement("h3", "", "Tóm tắt do AI gợi ý");
+            const summary = makeElement("p", "", result.summary);
+            panel.replaceChildren(heading, summary);
+            if (result.extracted_information.length) {
+              panel.append(makeElement("h3", "", "Thông tin nhận diện được"));
+              const list = document.createElement("ul");
+              result.extracted_information.forEach((item) => {
+                const entry = document.createElement("li");
+                entry.append(
+                  makeElement("strong", "", `${item.field}: `),
+                  document.createTextNode(`${item.value} — Nguồn: ${item.source}`),
+                );
+                list.append(entry);
+              });
+              panel.append(list);
+            }
+            panel.append(
+              makeElement(
+                "p",
+                "page-subtitle",
+                "Đối chiếu mọi thông tin với tài liệu gốc. AI có thể bỏ sót hoặc diễn giải sai.",
+              ),
+            );
+          } catch (error) {
+            panel.replaceChildren(
+              makeElement("p", "form-error", error.message),
+            );
+            throw error;
+          } finally {
+            button.disabled = false;
+            button.textContent = "AI đọc";
+          }
           break;
         }
         case "export-teachers":

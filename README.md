@@ -40,11 +40,21 @@ Quyền được kiểm tra ở API. Tác vụ thay đổi yêu cầu session co
 ## Lưu trữ, tài liệu và dữ liệu
 
 - Mặc định, SQLite là `teacher_management.db` tại thư mục chạy ứng dụng; có thể cấu hình `DATABASE_URL`.
-- Tệp minh chứng lưu trong `private_uploads/`, không được mount như tài nguyên tĩnh. HR có thể tải lên/tải xuống; giảng viên chỉ tải lên theo checklist và truy cập tài liệu thuộc hồ sơ đã liên kết. Chỉ PDF, PNG và JPEG tối đa 10 MB được chấp nhận. Tài liệu giảng viên nộp chờ HR xác nhận; tài liệu chưa được xác nhận không hoàn tất checklist.
+- Tệp minh chứng lưu trong `private_uploads/`, không được mount như tài nguyên tĩnh. HR có thể tải lên/tải xuống; giảng viên chỉ tải lên theo checklist và truy cập tài liệu thuộc hồ sơ đã liên kết. PDF, DOCX, PNG và JPEG tối đa 10 MB được chấp nhận. Tài liệu giảng viên nộp chờ HR xác nhận; tài liệu chưa được xác nhận không hoàn tất checklist.
 - Checklist có danh mục mẫu từ `ho_so_giang_vien.md`, gồm phân loại và điều kiện áp dụng. Khi tạo hồ sơ giảng viên, HR phải rà soát từng mục có điều kiện/bắt buộc để chọn bắt buộc, tùy chọn hoặc không áp dụng; chỉ tài liệu đã xác định là bắt buộc mới ảnh hưởng trạng thái đầy đủ. Mục tùy chọn không bắt buộc mặc định; giấy tờ định danh, bảo hiểm/thuế và ảnh được đánh dấu nhạy cảm. Danh mục và điều kiện có thể cấu hình, không áp dụng cho nhân viên không giảng dạy.
 - Hợp đồng sắp hết hạn mặc định được cảnh báo trước 30 ngày; cấu hình bằng `PUT /settings/contract-warning-days`. Cảnh báo không tự gia hạn hoặc đổi trạng thái.
 - Bằng cấp/chứng chỉ có thể lưu ngày hết hạn; cảnh báo chứng chỉ mặc định trước 30 ngày, HR có thể cấu hình trong trang tổng quan hoặc qua `PUT /settings/certificate-warning-days`.
-- Rà soát hồ sơ dùng checklist và kiểm tra dữ liệu làm căn cứ; Isolation Forest của scikit-learn chỉ gắn cờ tổ hợp chỉ số tổng hợp khác biệt để HR xem lại. Mô hình không đọc tệp, không dùng dữ liệu định danh, không tự kết luận/sửa hồ sơ và sẽ báo chưa đủ dữ liệu nếu có dưới 20 hồ sơ hoặc không có biến thiên. Tác vụ xử lý cục bộ, không gọi LLM hay dịch vụ AI bên ngoài.
+- Rà soát hồ sơ dùng checklist và kiểm tra dữ liệu làm căn cứ; Isolation Forest của scikit-learn chỉ gắn cờ tổ hợp chỉ số tổng hợp khác biệt để HR xem lại. Mô hình này không đọc tệp, không dùng dữ liệu định danh, không tự kết luận/sửa hồ sơ và sẽ báo chưa đủ dữ liệu nếu có dưới 20 hồ sơ hoặc không có biến thiên. Tác vụ Isolation Forest xử lý cục bộ; tính năng AI đọc tài liệu được mô tả riêng bên dưới.
+- HR có thể yêu cầu AI tóm tắt và trích xuất thông tin từ PDF có lớp văn bản hoặc DOCX bằng Ollama cục bộ. PDF tối đa 100 trang; văn bản trích xuất tối đa 20.000 ký tự. PDF scan/ảnh chụp, OCR và định dạng `.doc` chưa được hỗ trợ. Cài Ollama trước, sau đó trong cùng cửa sổ PowerShell dùng để khởi động ứng dụng, tải model từ nguồn được phê duyệt và cấu hình model:
+
+  ```powershell
+  $env:TEACHER_MANAGEMENT_OLLAMA_MODEL = "ten-model-da-cai"
+  ollama pull $env:TEACHER_MANAGEMENT_OLLAMA_MODEL
+  .\scripts\start_local.ps1
+  ```
+
+  Có thể đặt `TEACHER_MANAGEMENT_OLLAMA_URL` nếu cần; mặc định là `http://127.0.0.1:11434`. API chỉ cho phép endpoint địa chỉ IP loopback và không dùng proxy môi trường; nếu Ollama/model không sẵn sàng, tính năng báo lỗi thay vì chuyển sang dịch vụ bên ngoài. Chỉ nội dung xử lý gửi tới Ollama local.
+- Kết quả phân tích chỉ là gợi ý cho HR đối chiếu với tệp gốc, không xác minh tính xác thực, không đổi trạng thái duyệt/checklist và không cập nhật hồ sơ. Kết quả không được lưu; audit chỉ ghi người thực hiện, mã tài liệu, định dạng hoặc mã lỗi, không ghi nội dung trích xuất. Hiện chỉ dùng dữ liệu thử nghiệm, không dùng tài liệu nhân sự thật.
 - Danh sách phát hiện hồ sơ và cảnh báo chi tiết chỉ dành cho HR qua API; vai trò quản lý tiếp tục chỉ xem báo cáo tổng hợp theo quyền hiện có.
 - Nhật ký API không có thao tác sửa/xóa; audit ghi người dùng, thời điểm, loại thao tác, đối tượng và kết quả.
 
