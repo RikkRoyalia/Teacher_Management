@@ -1103,6 +1103,34 @@ async function renderChanges() {
       label: "Giá trị đề xuất",
       required: true,
     });
+    const syncProposedInput = () => {
+      const previous = proposed.querySelector('[name="proposed"]');
+      let next;
+      if (field.value === "department_id" || field.value === "employment_status") {
+        next = document.createElement("select");
+        next.append(new Option("Chọn giá trị", ""));
+        const options =
+          field.value === "department_id"
+            ? state.departments.map((department) => [
+                String(department.id),
+                `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
+              ])
+            : [
+                ["active", "Đang công tác"],
+                ["paused", "Tạm ngừng"],
+                ["ended", "Đã kết thúc"],
+              ];
+        options.forEach(([value, label]) => next.add(new Option(label, value)));
+      } else {
+        next = document.createElement("input");
+        next.type = "text";
+        next.maxLength = 80;
+      }
+      next.name = "proposed";
+      next.required = true;
+      previous.replaceWith(next);
+    };
+    field.addEventListener("change", syncProposedInput);
     const reason = inputField({
       name: "reason",
       label: "Lý do",
@@ -1134,27 +1162,37 @@ async function renderChanges() {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const fieldName = field.value;
+      const proposedValue = proposed.querySelector('[name="proposed"]').value;
       const value = ["department_id"].includes(fieldName)
-        ? Number(proposed.value)
-        : proposed.value;
+        ? Number(proposedValue)
+        : proposedValue;
       const current = state.teachers.find(
         (teacher) => teacher.id === Number(teacherSelect.value),
       );
+      submit.disabled = true;
       try {
         await api(`/teachers/${teacherSelect.value}/change-requests`, {
           method: "POST",
           body: JSON.stringify({
-            change_type: type.value,
+            change_type: type.querySelector('[name="change_type"]').value.trim(),
             current_value: { [fieldName]: current?.[fieldName] ?? null },
             proposed_value: { [fieldName]: value },
-            reason: reason.value,
-            effective_on: effective.value || null,
+            reason: reason.querySelector('[name="reason"]').value.trim(),
+            effective_on:
+              effective.querySelector('[name="effective_on"]').value || null,
           }),
         });
         showToast("Đã gửi yêu cầu.");
         await navigate(state.currentView);
       } catch (error) {
-        showToast(error.message, true);
+        showToast(
+          error instanceof Error
+            ? error.message
+            : "Không thể gửi yêu cầu thay đổi.",
+          true,
+        );
+      } finally {
+        submit.disabled = false;
       }
     });
     $("#workspace-form-region").append(form);
