@@ -369,6 +369,107 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertTrue(
             self.client.get(f"/teachers/{teacher_id}/completeness").json()["is_complete"]
         )
+        self.client.post("/auth/logout", headers=self.headers())
+
+        lecturer = self.login("lecturer-one", "Another safe password 456!")
+        self.csrf = str(lecturer["csrf_token"])
+        self.assertEqual(
+            self.client.delete(
+                f"/documents/{second_upload.json()['id']}",
+                headers=self.headers(),
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.delete(
+                f"/documents/{other_document.json()['id']}",
+                headers=self.headers(),
+            ).status_code,
+            404,
+        )
+        replaceable_upload = self.client.post(
+            f"/teachers/{teacher_id}/documents",
+            data={"checklist_item_id": checklist.json()["id"]},
+            files={
+                "file": (
+                    "replaceable.pdf",
+                    b"%PDF-1.4\nreplaceable",
+                    "application/pdf",
+                )
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(
+            replaceable_upload.status_code, 201, replaceable_upload.text
+        )
+        withdrawn = self.client.delete(
+            f"/documents/{replaceable_upload.json()['id']}",
+            headers=self.headers(),
+        )
+        self.assertEqual(withdrawn.status_code, 200, withdrawn.text)
+        self.assertEqual(withdrawn.json()["review_status"], "withdrawn")
+        self.assertTrue(
+            self.client.get(
+                f"/teachers/{teacher_id}/completeness"
+            ).json()["is_complete"]
+        )
+        self.client.post("/auth/logout", headers=self.headers())
+        hr = self.login("hr")
+        self.csrf = str(hr["csrf_token"])
+        self.assertEqual(
+            self.client.patch(
+                f"/documents/{replaceable_upload.json()['id']}/review",
+                json={"review_status": "approved"},
+                headers=self.headers(),
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/documents/{replaceable_upload.json()['id']}/analysis",
+                headers=self.headers(),
+            ).status_code,
+            409,
+        )
+        self.client.post("/auth/logout", headers=self.headers())
+        lecturer = self.login("lecturer-one", "Another safe password 456!")
+        self.csrf = str(lecturer["csrf_token"])
+        replacement_upload = self.client.post(
+            f"/teachers/{teacher_id}/documents",
+            data={"checklist_item_id": checklist.json()["id"]},
+            files={
+                "file": (
+                    "replacement.pdf",
+                    b"%PDF-1.4\nreplacement",
+                    "application/pdf",
+                )
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(
+            replacement_upload.status_code, 201, replacement_upload.text
+        )
+        self.assertEqual(replacement_upload.json()["review_status"], "pending")
+        self.client.post("/auth/logout", headers=self.headers())
+        with self.client.app.state.session_factory() as db:
+            withdrawn_document = db.get(
+                EvidenceDocument, replaceable_upload.json()["id"]
+            )
+            self.assertTrue(
+                (
+                    self.client.app.state.upload_dir
+                    / withdrawn_document.stored_name
+                ).is_file()
+            )
+            self.assertIsNotNone(
+                db.scalar(
+                    select(AuditLog).where(
+                        AuditLog.action == "document_withdrawn",
+                        AuditLog.entity_id
+                        == str(replaceable_upload.json()["id"]),
+                    )
+                )
+            )
 
     def test_demo_lecturer_seed_account_matches_existing_teacher(self) -> None:
         teacher_response = self.create_teacher(

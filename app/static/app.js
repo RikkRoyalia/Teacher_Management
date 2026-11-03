@@ -41,6 +41,7 @@ const statusLabels = {
   needs_info: "Cần bổ sung",
   approved: "Đã duyệt",
   rejected: "Từ chối",
+  withdrawn: "Đã thu hồi",
   expiring: "Sắp hết hạn",
   expired: "Đã hết hạn",
   terminated: "Đã chấm dứt",
@@ -948,7 +949,12 @@ async function renderLecturerPortal() {
     buildTable(
       ["Tài liệu", "Yêu cầu", "Minh chứng gần nhất"],
       requirements.map((item) => {
-        const document = documentsByItem.get(item.item_id);
+          const document =
+            documents.find(
+              (entry) =>
+                entry.checklist_item_id === item.item_id &&
+                entry.review_status === "approved",
+            ) || documentsByItem.get(item.item_id);
         const evidence = document
           ? makeElement(
               "span",
@@ -968,13 +974,21 @@ async function renderLecturerPortal() {
     ),
   );
   setTable(
-    ["Tài liệu đã nộp", "Dung lượng", "Ngày nộp", "Trạng thái", "Tải xuống"],
+    ["Tài liệu đã nộp", "Dung lượng", "Ngày nộp", "Trạng thái", "Thao tác"],
     documents.map((item) => [
       item.original_name,
       `${Math.ceil(item.size_bytes / 1024)} KB`,
       new Date(item.created_at).toLocaleString("vi-VN"),
       badge(item.review_status),
-      actionButton("Tải tệp", "download-document", item.id),
+      actionGroup([
+        actionButton("Tải tệp", "download-document", item.id),
+        ...(
+          item.review_status === "pending" &&
+          item.uploaded_by === state.user.id
+            ? [actionButton("Thu hồi", "withdraw-document", item.id, "danger")]
+            : []
+        ),
+      ]),
     ]),
     "Bạn chưa nộp tài liệu minh chứng.",
   );
@@ -1962,6 +1976,20 @@ function bindEvents() {
           URL.revokeObjectURL(link.href);
           break;
         }
+        case "withdraw-document": {
+          if (state.user.role !== "lecturer")
+            throw new Error("Chỉ giảng viên mới có thể thu hồi tài liệu của mình.");
+          if (
+            !window.confirm(
+              "Thu hồi tài liệu đang chờ rà soát? Tệp sẽ được giữ trong lịch sử và bạn có thể nộp bản đúng thay thế.",
+            )
+          )
+            break;
+          await api(`/documents/${id}`, { method: "DELETE" });
+          showToast("Đã thu hồi tài liệu. Bạn có thể nộp bản đúng thay thế.");
+          await renderWorkspace();
+          break;
+        }
         case "approve-document":
         case "reject-document": {
           if (state.user.role !== "hr")
@@ -2479,10 +2507,11 @@ async function drawDetailTab(teacher) {
             ? [
                 actionGroup([
                   actionButton("Tải tệp", "download-document", item.id),
-                ...(item.original_name.toLowerCase().endsWith(".pdf") ||
-                item.original_name.toLowerCase().endsWith(".docx")
-                  ? [actionButton("AI đọc", "analyze-document", item.id)]
-                  : []),
+                  ...(item.review_status !== "withdrawn" &&
+                  (item.original_name.toLowerCase().endsWith(".pdf") ||
+                    item.original_name.toLowerCase().endsWith(".docx"))
+                    ? [actionButton("AI đọc", "analyze-document", item.id)]
+                    : []),
                 ...(item.review_status === "pending"
                   ? [
                         actionButton("Duyệt", "approve-document", item.id),

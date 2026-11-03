@@ -1121,6 +1121,11 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         document = db.get(EvidenceDocument, document_id)
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found.")
+        if document.review_status == "withdrawn":
+            raise HTTPException(
+                status_code=409,
+                detail="Withdrawn documents cannot be analyzed.",
+            )
         if Path(document.original_name).suffix.lower() not in {".pdf", ".docx"}:
             raise HTTPException(
                 status_code=415,
@@ -1162,6 +1167,55 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         )
         db.commit()
         return result
+
+    @application.delete(
+        "/documents/{document_id}",
+        response_model=EvidenceDocumentRead,
+        tags=["documents"],
+    )
+    def withdraw_lecturer_document(
+        document_id: int,
+        db: DbSession,
+        actor: Annotated[User, Depends(require_roles("lecturer"))],
+    ) -> EvidenceDocument:
+        document = db.get(EvidenceDocument, document_id)
+        if (
+            document is None
+            or document.teacher_id != actor.teacher_id
+            or document.uploaded_by != actor.id
+        ):
+            raise HTTPException(status_code=404, detail="Document not found.")
+        if document.review_status != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail="Only your documents awaiting HR review can be withdrawn.",
+            )
+        claimed = db.execute(
+            update(EvidenceDocument)
+            .where(
+                EvidenceDocument.id == document_id,
+                EvidenceDocument.teacher_id == actor.teacher_id,
+                EvidenceDocument.uploaded_by == actor.id,
+                EvidenceDocument.review_status == "pending",
+            )
+            .values(review_status="withdrawn")
+        )
+        if claimed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="The document has already been reviewed and cannot be withdrawn.",
+            )
+        record_audit(
+            db,
+            actor,
+            "document_withdrawn",
+            "document",
+            document_id,
+        )
+        db.commit()
+        db.refresh(document)
+        return document
 
     @application.patch(
         "/documents/{document_id}/review",

@@ -77,6 +77,7 @@ Quy tắc nghiệp vụ:
 * BR-03.2: Thông tin văn bằng phải gắn với một hồ sơ giảng viên hợp lệ.  
 * BR-03.3: Hệ thống chỉ quản lý thông tin và tài liệu được cung cấp, không tự kết luận văn bằng là thật hay giả.  
 * BR-03.4: Việc chỉnh sửa hoặc thay thế tài liệu phải tuân theo quyền được cấp và được ghi nhận khi thuộc nhóm thao tác cần kiểm soát.
+* Tài khoản giảng viên chỉ được thu hồi tài liệu do chính mình nộp khi tài liệu còn chờ nhân sự rà soát; thao tác giữ lại tệp và lịch sử, sau đó giảng viên có thể nộp bản thay thế. Tài liệu đã được nhân sự duyệt hoặc từ chối không được giảng viên sửa hoặc xóa.
 
 ### 3.2.4. BR-04 – Quản lý hợp đồng lao động
 

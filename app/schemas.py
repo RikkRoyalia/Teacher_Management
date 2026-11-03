@@ -418,7 +418,7 @@ class EvidenceDocumentRead(BaseModel):
     content_type: str
     size_bytes: int
     uploaded_by: int
-    review_status: Literal["pending", "approved", "rejected"]
+    review_status: Literal["pending", "approved", "rejected", "withdrawn"]
     review_reason: str | None
     reviewed_by: int | None
     reviewed_at: datetime | None

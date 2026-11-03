@@ -159,6 +159,11 @@ class LegacyDatabaseMigrationTests(unittest.TestCase):
                         ).scalar_one(),
                         1,
                     )
+                    document_table = connection.exec_driver_sql(
+                        "SELECT sql FROM sqlite_master "
+                        "WHERE type='table' AND name='evidence_documents'"
+                    ).scalar_one()
+                    self.assertIn("'withdrawn'", document_table)
                 self.assertEqual(len(list(backup_path.glob("pre-migration-*.sqlite3"))), 1)
                 migrate_database(database_url, engine)
                 self.assertEqual(len(list(backup_path.glob("pre-migration-*.sqlite3"))), 1)

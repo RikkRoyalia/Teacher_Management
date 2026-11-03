@@ -251,7 +251,7 @@ class EvidenceDocument(Base):
     __tablename__ = "evidence_documents"
     __table_args__ = (
         CheckConstraint(
-            "review_status IN ('pending', 'approved', 'rejected')",
+            "review_status IN ('pending', 'approved', 'rejected', 'withdrawn')",
             name="ck_evidence_document_review_status",
         ),
     )
