@@ -46,6 +46,14 @@ const statusLabels = {
   expired: "Đã hết hạn",
   terminated: "Đã chấm dứt",
 };
+const academicDegrees = ["Cử nhân", "Thạc sĩ", "Tiến sĩ", "Phó giáo sư"];
+const academicTitles = ["Trợ giảng", "Giảng viên", "Giảng viên chính"];
+const changeTypeLabels = {
+  department_id: "Thay đổi đơn vị công tác",
+  academic_degree: "Thay đổi trình độ chuyên môn",
+  academic_title: "Thay đổi chức danh",
+  employment_status: "Thay đổi trạng thái công tác",
+};
 const checklistClassifications = {
   required: "Bắt buộc theo danh mục",
   conditional: "Có điều kiện",
@@ -66,6 +74,38 @@ function makeElement(tag, className = "", text = "") {
   if (className) element.className = className;
   if (text !== undefined && text !== null) element.textContent = String(text);
   return element;
+}
+
+function completenessSummary(completeness) {
+  if (completeness.is_complete)
+    return "Hồ sơ đã đầy đủ theo các yêu cầu đã được xác định.";
+  const messages = [];
+  if (completeness.missing.length)
+    messages.push(`Thiếu tài liệu bắt buộc: ${completeness.missing.join(", ")}.`);
+  if (completeness.needs_review.length)
+    messages.push(
+      `Chờ HR xác định yêu cầu áp dụng: ${completeness.needs_review.join(", ")}.`,
+    );
+  return messages.join(" ") || "Hồ sơ chưa hoàn tất; cần HR rà soát thêm.";
+}
+
+function formatChangeRequestValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return "—";
+  return Object.entries(value)
+    .map(([field, item]) => {
+      if (item === null || item === undefined || item === "") return "—";
+      if (field === "department_id") {
+        return (
+          state.departments.find((department) => department.id === Number(item))
+            ?.name || `Đơn vị #${item}`
+        );
+      }
+      if (field === "employment_status")
+        return statusLabels[item] || String(item);
+      return String(item);
+    })
+    .join(", ");
 }
 
 function addPasswordToggle(input) {
@@ -498,11 +538,14 @@ function statCard(label, value, icon, view) {
 
 async function downloadResponse(path, filename) {
   const response = await api(path);
+  const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(await response.blob());
+  link.href = url;
   link.download = filename;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(link.href);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function renderOverview() {
@@ -888,10 +931,7 @@ async function renderLecturerPortal() {
     makeElement(
       "p",
       "page-subtitle",
-      completeness.is_complete
-        ? "Hồ sơ đã đầy đủ theo các yêu cầu được rà soát."
-        : `Hồ sơ chưa đầy đủ. Còn thiếu: ${completeness.missing.join(", ") || "không có"}. ` +
-            `Cần HR rà soát: ${completeness.needs_review.join(", ") || "không có"}.`,
+      completenessSummary(completeness),
     ),
   );
 
@@ -1049,6 +1089,9 @@ async function renderChanges() {
     ],
     requests.map((item) => {
       const actions = document.createElement("div");
+      const teacher = state.teachers.find(
+        (candidate) => candidate.id === item.teacher_id,
+      );
       if (state.user.role === "manager" && item.status === "pending") {
         actions.append(actionButton("Duyệt", "decide-change", item.id));
         actions.append(actionButton("Từ chối", "reject-change", item.id));
@@ -1061,10 +1104,12 @@ async function renderChanges() {
       }
       return [
         item.id,
-        item.teacher_id,
+        teacher
+          ? `${teacher.employee_code} — ${teacher.full_name}`
+          : `Giảng viên #${item.teacher_id}`,
         item.change_type,
-        JSON.stringify(item.current_value),
-        JSON.stringify(item.proposed_value),
+        formatChangeRequestValue(item.current_value),
+        formatChangeRequestValue(item.proposed_value),
         item.reason,
         badge(item.status),
         actions,
@@ -1083,11 +1128,6 @@ async function renderChanges() {
         ),
       ),
     );
-    const type = inputField({
-      name: "change_type",
-      label: "Loại thay đổi",
-      required: true,
-    });
     const field = document.createElement("select");
     field.name = "field";
     field.required = true;
@@ -1105,27 +1145,31 @@ async function renderChanges() {
     });
     const syncProposedInput = () => {
       const previous = proposed.querySelector('[name="proposed"]');
-      let next;
-      if (field.value === "department_id" || field.value === "employment_status") {
-        next = document.createElement("select");
-        next.append(new Option("Chọn giá trị", ""));
-        const options =
-          field.value === "department_id"
-            ? state.departments.map((department) => [
-                String(department.id),
-                `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
-              ])
-            : [
-                ["active", "Đang công tác"],
-                ["paused", "Tạm ngừng"],
-                ["ended", "Đã kết thúc"],
-              ];
-        options.forEach(([value, label]) => next.add(new Option(label, value)));
+      const next = document.createElement("select");
+      next.append(new Option("Chọn giá trị", ""));
+      let options;
+      if (field.value === "department_id") {
+        options = state.departments.map((department) => [
+          String(department.id),
+          `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
+        ]);
+      } else if (field.value === "employment_status") {
+        options = [
+          ["active", "Đang công tác"],
+          ["paused", "Tạm ngừng"],
+          ["ended", "Đã kết thúc"],
+        ];
       } else {
-        next = document.createElement("input");
-        next.type = "text";
-        next.maxLength = 80;
+        const standardValues =
+          field.value === "academic_degree" ? academicDegrees : academicTitles;
+        const existingValues = state.teachers
+          .map((teacher) => teacher[field.value])
+          .filter(Boolean);
+        options = [...new Set([...standardValues, ...existingValues])].map(
+          (value) => [value, value],
+        );
       }
+      options.forEach(([value, label]) => next.add(new Option(label, value)));
       next.name = "proposed";
       next.required = true;
       previous.replaceWith(next);
@@ -1146,7 +1190,6 @@ async function renderChanges() {
     form.append(
       makeElement("strong", "", "Tạo yêu cầu thay đổi"),
       teacherSelect,
-      type,
       field,
       proposed,
       reason,
@@ -1174,7 +1217,7 @@ async function renderChanges() {
         await api(`/teachers/${teacherSelect.value}/change-requests`, {
           method: "POST",
           body: JSON.stringify({
-            change_type: type.querySelector('[name="change_type"]').value.trim(),
+            change_type: changeTypeLabels[fieldName],
             current_value: { [fieldName]: current?.[fieldName] ?? null },
             proposed_value: { [fieldName]: value },
             reason: reason.querySelector('[name="reason"]').value.trim(),
@@ -2523,6 +2566,15 @@ async function drawDetailTab(teacher) {
     }
   } else if (state.detailTab === "docs") {
     const items = await api(`/teachers/${id}/documents`);
+    if (isHr) {
+      body.append(
+        makeElement(
+          "p",
+          "page-subtitle",
+          "Nhân sự có thể tải minh chứng lên từ hồ sơ này. Tài liệu do giảng viên nộp sẽ có thao tác duyệt hoặc từ chối khi đang chờ rà soát.",
+        ),
+      );
+    }
     body.append(
       buildTable(
         [
@@ -2672,10 +2724,7 @@ async function drawDetailTab(teacher) {
         "p",
         "page-subtitle",
         `${teacher.employee_code} — ${teacher.full_name}. ` +
-          (completeness.is_complete
-            ? "Hồ sơ đầy đủ theo các yêu cầu đã rà soát."
-            : `Còn thiếu: ${completeness.missing.join(", ") || "không có"}. ` +
-              `Cần rà soát điều kiện: ${completeness.needs_review.join(", ") || "không có"}.`),
+          completenessSummary(completeness),
       ),
     );
     body.append(
