@@ -45,6 +45,13 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
+    managed_departments: Mapped[list["Department"]] = relationship(
+        secondary="manager_department_assignments", lazy="selectin"
+    )
+
+    @property
+    def managed_department_ids(self) -> list[int]:
+        return [department.id for department in self.managed_departments]
 
 
 class LoginSession(Base):
@@ -77,6 +84,25 @@ class Department(Base):
         remote_side="Department.id", back_populates="children"
     )
     children: Mapped[list["Department"]] = relationship(back_populates="parent")
+
+
+class ManagerDepartmentAssignment(Base):
+    __tablename__ = "manager_department_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "manager_id",
+            "department_id",
+            name="uq_manager_department_assignment",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    manager_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), index=True
+    )
 
 
 class Teacher(Base):
@@ -350,6 +376,28 @@ class AuditLog(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
         index=True,
+    )
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_key", name="uq_notification_user_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    event_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    level: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    target_view: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(80))
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 

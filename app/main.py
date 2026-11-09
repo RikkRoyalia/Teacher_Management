@@ -49,6 +49,7 @@ from app.models import (
     EmploymentContract,
     EvidenceDocument,
     LoginSession,
+    Notification,
     Qualification,
     Teacher,
     TeacherChecklistRequirement,
@@ -134,6 +135,114 @@ HR_OR_LECTURER = Annotated[User, Depends(require_roles("hr", "lecturer"))]
 MANAGER_USER = Annotated[User, Depends(require_roles("manager"))]
 ADMIN_USER = Annotated[User, Depends(require_roles("admin"))]
 HR_OR_MANAGER = Annotated[User, Depends(require_roles("hr", "manager"))]
+NOTIFICATION_USER = Annotated[
+    User, Depends(require_roles("admin", "hr", "manager", "lecturer"))
+]
+
+
+def _create_notification(
+    db: Session,
+    user_id: int,
+    event_key: str,
+    title: str,
+    message: str,
+    level: str,
+    view: str,
+    target_id: int | str | None = None,
+) -> None:
+    exists = db.scalar(
+        select(Notification.id).where(
+            Notification.user_id == user_id,
+            Notification.event_key == event_key,
+        )
+    )
+    if exists is None:
+        db.add(
+            Notification(
+                user_id=user_id,
+                event_key=event_key,
+                title=title,
+                message=message,
+                level=level,
+                target_view=view,
+                target_id=str(target_id) if target_id is not None else None,
+            )
+        )
+
+
+def _notify_roles(
+    db: Session,
+    roles: tuple[str, ...],
+    event_key: str,
+    title: str,
+    message: str,
+    level: str,
+    view: str,
+    target_id: int | str | None = None,
+    exclude_user_id: int | None = None,
+) -> None:
+    statement = select(User.id).where(
+        User.role.in_(roles),
+        User.is_active.is_(True),
+    )
+    if exclude_user_id is not None:
+        statement = statement.where(User.id != exclude_user_id)
+    for user_id in set(db.scalars(statement)):
+        _create_notification(
+            db, user_id, event_key, title, message, level, view, target_id
+        )
+
+
+def _notify_managers(
+    db: Session,
+    department_ids: set[int],
+    event_key: str,
+    title: str,
+    message: str,
+    view: str,
+    target_id: int | str | None = None,
+    exclude_user_id: int | None = None,
+) -> None:
+    if not department_ids:
+        return
+    statement = (
+        select(User.id)
+        .join(User.managed_departments)
+        .where(
+            User.role == "manager",
+            User.is_active.is_(True),
+            Department.id.in_(department_ids),
+        )
+    )
+    if exclude_user_id is not None:
+        statement = statement.where(User.id != exclude_user_id)
+    for user_id in set(db.scalars(statement)):
+        _create_notification(
+            db, user_id, event_key, title, message, "info", view, target_id
+        )
+
+
+def _notify_lecturer(
+    db: Session,
+    teacher_id: int,
+    event_key: str,
+    title: str,
+    message: str,
+    level: str,
+    view: str = "lecturer",
+    target_id: int | str | None = None,
+) -> None:
+    lecturer_ids = db.scalars(
+        select(User.id).where(
+            User.role == "lecturer",
+            User.teacher_id == teacher_id,
+            User.is_active.is_(True),
+        )
+    )
+    for user_id in lecturer_ids:
+        _create_notification(
+            db, user_id, event_key, title, message, level, view, target_id
+        )
 
 
 def _report_teacher_filters(
@@ -499,6 +608,22 @@ def create_app(
     def list_users(db: DbSession, _: ADMIN_USER) -> list[User]:
         return list(db.scalars(select(User).order_by(User.username)))
 
+    @application.get("/users/manager-departments", tags=["accounts"])
+    def list_manager_departments(
+        db: DbSession,
+        _: ADMIN_USER,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": department.id,
+                "name": department.name,
+                "is_active": department.is_active,
+            }
+            for department in db.scalars(
+                select(Department).order_by(Department.name, Department.id)
+            )
+        ]
+
     @application.get("/users/linkable-teachers", tags=["accounts"])
     def list_linkable_teachers(
         db: DbSession,
@@ -532,12 +657,22 @@ def create_app(
     def create_user(payload: UserCreate, db: DbSession, actor: ADMIN_USER) -> User:
         if payload.teacher_id is not None:
             _require_linkable_teacher(db, payload.teacher_id)
+        managed_departments = list(
+            db.scalars(
+                select(Department).where(
+                    Department.id.in_(payload.managed_department_ids)
+                )
+            )
+        ) if payload.managed_department_ids else []
+        if len(managed_departments) != len(payload.managed_department_ids):
+            raise HTTPException(status_code=404, detail="Department not found.")
         user = User(
             username=payload.username.lower(),
             full_name=payload.full_name,
             password_hash=hash_password(payload.password),
             role=payload.role,
             teacher_id=payload.teacher_id,
+            managed_departments=managed_departments,
         )
         db.add(user)
         try:
@@ -550,6 +685,40 @@ def create_app(
                 user.id,
                 details={"role": user.role, "teacher_id": user.teacher_id},
             )
+            _notify_roles(
+                db,
+                ("admin",),
+                f"account-created:{user.id}",
+                "Tài khoản mới được tạo",
+                f"Tài khoản {user.username} ({user.full_name}) đã được tạo.",
+                "info",
+                "accounts",
+                user.id,
+                exclude_user_id=actor.id,
+            )
+            if user.role == "lecturer" and user.teacher_id is not None:
+                _notify_lecturer(
+                    db,
+                    user.teacher_id,
+                    f"lecturer-account-created:{user.id}",
+                    "Tài khoản giảng viên đã được cấp",
+                    "Bạn có thể đăng nhập để xem hồ sơ và checklist của mình.",
+                    "success",
+                    target_id=user.teacher_id,
+                )
+                teacher = db.get(Teacher, user.teacher_id)
+                missing, needs_review = _teacher_completeness(db, teacher)
+                if missing or needs_review:
+                    details = ", ".join(missing + needs_review)
+                    _notify_lecturer(
+                        db,
+                        user.teacher_id,
+                        f"profile-incomplete-account-created:{user.id}",
+                        "Hồ sơ cần bổ sung hoặc rà soát",
+                        details or "Hồ sơ cần được nhân sự rà soát thêm.",
+                        "warning",
+                        target_id=user.teacher_id,
+                    )
             db.commit()
         except IntegrityError as error:
             db.rollback()
@@ -567,7 +736,9 @@ def create_app(
         target = db.get(User, user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="User not found.")
+        was_active = target.is_active
         changes = payload.model_dump(exclude_unset=True)
+        managed_department_ids = changes.pop("managed_department_ids", None)
         role = changes.get("role", target.role)
         teacher_id = changes.get("teacher_id", target.teacher_id)
         if role == "lecturer":
@@ -582,6 +753,19 @@ def create_app(
                 status_code=422,
                 detail="Only lecturer accounts can be linked to a teacher profile.",
             )
+        if role == "manager" and managed_department_ids is not None:
+            managed_departments = list(
+                db.scalars(
+                    select(Department).where(
+                        Department.id.in_(managed_department_ids)
+                    )
+                )
+            ) if managed_department_ids else []
+            if len(managed_departments) != len(managed_department_ids):
+                raise HTTPException(status_code=404, detail="Department not found.")
+            target.managed_departments = managed_departments
+        elif role != "manager":
+            target.managed_departments = []
         if target.id == actor.id and (
             changes.get("is_active") is False
             or ("role" in changes and changes["role"] != actor.role)
@@ -608,6 +792,18 @@ def create_app(
                 db.delete(login_session)
         for field, value in changes.items():
             setattr(target, field, value)
+        if changes.get("is_active") is False and was_active:
+            _notify_roles(
+                db,
+                ("admin",),
+                f"account-inactive:{target.id}",
+                "Tài khoản đã bị khóa",
+                f"Tài khoản {target.username} đã bị khóa.",
+                "warning",
+                "accounts",
+                target.id,
+                exclude_user_id=actor.id,
+            )
         record_audit(db, actor, "user_updated", "user", target.id, details=changes)
         try:
             db.commit()
@@ -669,11 +865,11 @@ def create_app(
     )
     def list_departments(
         db: DbSession,
-        _: Annotated[User, Depends(require_roles("hr", "manager"))],
+        actor: Annotated[User, Depends(require_roles("hr", "manager", "lecturer"))],
         include_inactive: bool = False,
     ) -> list[Department]:
         statement = select(Department).order_by(Department.name, Department.id)
-        if not include_inactive:
+        if actor.role == "lecturer" or not include_inactive:
             statement = statement.where(Department.is_active.is_(True))
         return list(db.scalars(statement))
 
@@ -721,6 +917,36 @@ def create_app(
             db.flush()
             _initialize_teacher(db, teacher)
             record_audit(db, actor, "teacher_created", "teacher", teacher.id)
+            _notify_roles(
+                db,
+                ("admin",),
+                f"teacher-created:{teacher.id}",
+                "Hồ sơ giảng viên mới",
+                f"HR đã tạo hồ sơ {teacher.employee_code} — {teacher.full_name}.",
+                "info",
+                "overview",
+                teacher.id,
+            )
+            _notify_roles(
+                db,
+                ("hr",),
+                f"teacher-created:{teacher.id}",
+                "Hồ sơ giảng viên mới",
+                f"Hồ sơ {teacher.employee_code} — {teacher.full_name} đã được tiếp nhận.",
+                "info",
+                "teacherDetail",
+                teacher.id,
+                exclude_user_id=actor.id,
+            )
+            _notify_managers(
+                db,
+                {teacher.department_id},
+                f"teacher-created:{teacher.id}",
+                "Nhân sự mới thuộc đơn vị phụ trách",
+                f"{teacher.employee_code} — {teacher.full_name} đã được tạo hồ sơ.",
+                "reports",
+                teacher.id,
+            )
             db.commit()
         except IntegrityError as error:
             db.rollback()
@@ -935,6 +1161,25 @@ def create_app(
         for field, value in changes.items():
             setattr(teacher, field, value)
         record_audit(db, actor, "teacher_updated", "teacher", teacher.id, details={"fields": sorted(changes)})
+        event_key = f"teacher-updated:{teacher.id}:{datetime.now(timezone.utc).isoformat()}"
+        _notify_managers(
+            db,
+            {teacher.department_id},
+            event_key,
+            "Hồ sơ nhân sự được cập nhật",
+            f"Hồ sơ {teacher.employee_code} — {teacher.full_name} đã được cập nhật.",
+            "reports",
+            teacher.id,
+        )
+        _notify_lecturer(
+            db,
+            teacher.id,
+            event_key,
+            "Hồ sơ của bạn đã được cập nhật",
+            "Nhân sự đã cập nhật thông tin hồ sơ của bạn.",
+            "info",
+            target_id=teacher.id,
+        )
         db.commit()
         db.refresh(teacher)
         return teacher
@@ -1111,7 +1356,37 @@ def create_app(
         )
         history = WorkHistory(teacher_id=teacher.id, **payload.model_dump())
         db.add(history)
+        db.flush()
         record_audit(db, actor, "work_history_created", "teacher", teacher.id)
+        _notify_roles(
+            db,
+            ("hr",),
+            f"work-history-created:{history.id}",
+            "Quá trình công tác được cập nhật",
+            f"Quá trình công tác của {teacher.employee_code} — {teacher.full_name} đã được cập nhật.",
+            "info",
+            "teacherDetail",
+            teacher.id,
+            exclude_user_id=actor.id,
+        )
+        _notify_managers(
+            db,
+            {teacher.department_id, history.department_id},
+            f"work-history-created:{history.id}",
+            "Quá trình công tác được cập nhật",
+            f"Quá trình công tác của {teacher.employee_code} — {teacher.full_name} đã được cập nhật.",
+            "reports",
+            teacher.id,
+        )
+        _notify_lecturer(
+            db,
+            teacher.id,
+            f"work-history-created:{history.id}",
+            "Quá trình công tác được cập nhật",
+            "Nhân sự đã cập nhật quá trình công tác trong hồ sơ của bạn.",
+            "info",
+            target_id=teacher.id,
+        )
         db.commit()
         db.refresh(history)
         return history
@@ -1210,6 +1485,17 @@ def create_app(
         try:
             db.flush()
             record_audit(db, actor, "document_uploaded", "document", document.id)
+            if actor.role == "lecturer":
+                _notify_roles(
+                    db,
+                    ("hr",),
+                    f"document-uploaded:{document.id}",
+                    "Tài liệu mới chờ rà soát",
+                    f"{document.original_name} được nộp cho hồ sơ giảng viên #{teacher_id}.",
+                    "info",
+                    "teacherDetail",
+                    teacher_id,
+                )
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -1399,6 +1685,27 @@ def create_app(
             document.id,
             details={"review_status": payload.review_status},
         )
+        notification_title = (
+            "Tài liệu đã được duyệt"
+            if payload.review_status == "approved"
+            else "Tài liệu cần được bổ sung"
+        )
+        notification_message = (
+            f"Tài liệu {document.original_name} đã được duyệt."
+            if payload.review_status == "approved"
+            else f"Tài liệu {document.original_name} cần được bổ sung."
+        )
+        if payload.reason:
+            notification_message += f" Lý do: {payload.reason}"
+        _notify_lecturer(
+            db,
+            document.teacher_id,
+            f"document-reviewed:{document.id}",
+            notification_title,
+            notification_message,
+            "success" if payload.review_status == "approved" else "warning",
+            target_id=document.teacher_id,
+        )
         db.commit()
         db.refresh(document)
         return document
@@ -1545,6 +1852,9 @@ def create_app(
                 TeacherChecklistRequirement.checklist_item_id == item_id,
             )
         )
+        previous_status = (
+            requirement.status if requirement else _default_checklist_status(item)
+        )
         if requirement is None:
             requirement = TeacherChecklistRequirement(
                 teacher_id=teacher_id,
@@ -1562,6 +1872,24 @@ def create_app(
             "teacher_checklist_requirement",
             f"{teacher_id}:{item_id}",
         )
+        if payload.status == "required" and previous_status != "required":
+            approved_document = db.scalar(
+                select(EvidenceDocument.id).where(
+                    EvidenceDocument.teacher_id == teacher_id,
+                    EvidenceDocument.checklist_item_id == item_id,
+                    EvidenceDocument.review_status == "approved",
+                ).limit(1)
+            )
+            if approved_document is None:
+                _notify_lecturer(
+                    db,
+                    teacher_id,
+                    f"checklist-required:{teacher_id}:{item_id}:{datetime.now(timezone.utc).isoformat()}",
+                    "Hồ sơ cần bổ sung tài liệu",
+                    f"Mục “{item.label}” được xác định là bắt buộc. Vui lòng bổ sung minh chứng.",
+                    "warning",
+                    target_id=teacher_id,
+                )
         db.commit()
         return {
             "item_id": item.id,
@@ -1683,97 +2011,152 @@ def create_app(
         db.commit()
         return {"days": days}
 
-    @application.get("/notifications", tags=["notifications"])
-    def list_notifications(
-        db: DbSession,
-        user: Annotated[User, Depends(require_roles("admin", "hr", "manager"))],
-    ) -> list[dict[str, Any]]:
-        now = datetime.now(timezone.utc)
-        items: list[dict[str, Any]] = []
+    @application.post("/notifications/refresh", tags=["notifications"])
+    def refresh_notifications(db: DbSession, user: NOTIFICATION_USER) -> dict[str, str]:
+        today = date.today()
         if user.role == "hr":
-            since = now - timedelta(days=30)
-            outcomes = {
-                "needs_info": ("Yêu cầu cần bổ sung thông tin", "warning"),
-                "rejected": ("Yêu cầu bị từ chối", "danger"),
-                "approved": ("Yêu cầu đã được duyệt", "success"),
-            }
-            for item in db.scalars(
-                select(ChangeRequest)
+            contracts = db.execute(
+                select(EmploymentContract, Teacher)
+                .join(Teacher, EmploymentContract.teacher_id == Teacher.id)
                 .where(
-                    ChangeRequest.requester_id == user.id,
-                    ChangeRequest.status.in_(list(outcomes)),
-                    ChangeRequest.processed_at.is_not(None),
-                )
-                .order_by(ChangeRequest.processed_at.desc())
-                .limit(20)
-            ):
-                processed = _as_utc(item.processed_at)
-                if processed < since:
-                    continue
-                title, level = outcomes[item.status]
-                items.append({
-                    "id": f"change-{item.id}-{item.status}",
-                    "level": level,
-                    "title": title,
-                    "message": f"Yêu cầu #{item.id} ({item.change_type})."
-                    + (f" Lý do: {item.resolution_reason}" if item.resolution_reason else ""),
-                    "created_at": processed,
-                    "view": "changes",
-                })
-            alerts = db.scalar(
-                select(func.count()).select_from(EmploymentContract).where(
                     EmploymentContract.status == "active",
                     EmploymentContract.ends_on.is_not(None),
-                    EmploymentContract.ends_on <= date.today() + timedelta(days=_contract_warning_days(db)),
+                    EmploymentContract.ends_on
+                    <= today + timedelta(days=_contract_warning_days(db)),
                 )
-            )
-            if alerts:
-                items.append({
-                    "id": f"contracts-{alerts}", "level": "warning",
-                    "title": "Hợp đồng sắp hoặc đã hết hạn",
-                    "message": f"Có {alerts} hợp đồng cần theo dõi.",
-                    "created_at": now, "view": "overview",
-                })
-            expiring_certificates = db.scalar(
-                select(func.count()).select_from(Qualification).where(
+            ).all()
+            for contract, teacher in contracts:
+                _notify_roles(
+                    db,
+                    ("hr",),
+                    f"contract-expiring:{contract.id}:{contract.ends_on.isoformat()}",
+                    "Hợp đồng sắp hoặc đã hết hạn",
+                    f"Hợp đồng {contract.contract_code} của {teacher.full_name} hết hạn ngày {contract.ends_on}.",
+                    "warning",
+                    "overview",
+                    contract.id,
+                )
+            certificates = db.scalars(
+                select(Qualification).where(
                     Qualification.qualification_type == "certificate",
                     Qualification.expires_on.is_not(None),
                     Qualification.expires_on
-                    <= date.today() + timedelta(days=_certificate_warning_days(db)),
+                    <= today + timedelta(days=_certificate_warning_days(db)),
                 )
             )
-            if expiring_certificates:
-                items.append({
-                    "id": f"certificates-{expiring_certificates}",
-                    "level": "warning",
-                    "title": "Chứng chỉ sắp hoặc đã hết hạn",
-                    "message": f"Có {expiring_certificates} chứng chỉ cần theo dõi.",
-                    "created_at": now,
-                    "view": "overview",
-                })
+            for certificate in certificates:
+                _notify_roles(
+                    db,
+                    ("hr",),
+                    f"certificate-expiring:{certificate.id}:{certificate.expires_on.isoformat()}",
+                    "Chứng chỉ sắp hoặc đã hết hạn",
+                    f"Chứng chỉ “{certificate.title}” sắp hoặc đã hết hạn.",
+                    "warning",
+                    "overview",
+                    certificate.id,
+                )
         elif user.role == "manager":
-            pending = list(db.scalars(
-                select(ChangeRequest).where(
-                    ChangeRequest.status == "pending", ChangeRequest.requester_id != user.id
-                ).order_by(ChangeRequest.created_at.desc())
-            ))
-            if pending:
-                items.append({
-                    "id": f"pending-{len(pending)}", "level": "info",
-                    "title": "Yêu cầu đang chờ duyệt",
-                    "message": f"Có {len(pending)} yêu cầu thay đổi cần xử lý.",
-                    "created_at": _as_utc(pending[0].created_at), "view": "changes",
-                })
-        else:
-            locked = db.scalar(select(func.count()).select_from(User).where(User.is_active.is_(False)))
-            if locked:
-                items.append({
-                    "id": f"locked-{locked}", "level": "info",
-                    "title": "Tài khoản đang bị khóa",
-                    "message": f"Có {locked} tài khoản đang bị khóa.",
-                    "created_at": now, "view": "accounts",
-                })
-        return sorted(items, key=lambda entry: entry["created_at"], reverse=True)
+            pending = db.execute(
+                select(ChangeRequest, Teacher)
+                .join(Teacher, ChangeRequest.teacher_id == Teacher.id)
+                .where(ChangeRequest.status == "pending")
+            ).all()
+            for request_item, teacher in pending:
+                submitted_event_id = db.scalar(
+                    select(ChangeRequestEvent.id)
+                    .where(
+                        ChangeRequestEvent.change_request_id == request_item.id,
+                        ChangeRequestEvent.event_type.in_(("submitted", "resubmitted")),
+                    )
+                    .order_by(ChangeRequestEvent.id.desc())
+                    .limit(1)
+                )
+                if submitted_event_id is None:
+                    continue
+                _notify_managers(
+                    db,
+                    {teacher.department_id},
+                    f"change-request-event:{submitted_event_id}",
+                    "Đề xuất nhân sự cần xem xét",
+                    f"Yêu cầu #{request_item.id} ({request_item.change_type}) của {teacher.full_name} đang chờ xử lý.",
+                    "changes",
+                    request_item.id,
+                )
+        elif user.role == "admin":
+            inactive_users = db.scalars(
+                select(User).where(User.is_active.is_(False))
+            )
+            for inactive_user in inactive_users:
+                _notify_roles(
+                    db,
+                    ("admin",),
+                    f"account-inactive:{inactive_user.id}",
+                    "Tài khoản đang bị khóa",
+                    f"Tài khoản {inactive_user.username} đang bị khóa.",
+                    "warning",
+                    "accounts",
+                    inactive_user.id,
+                )
+        db.commit()
+        return {"status": "refreshed"}
+
+    @application.get("/notifications", tags=["notifications"])
+    def list_notifications(
+        db: DbSession,
+        user: NOTIFICATION_USER,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item.id,
+                "level": item.level,
+                "title": item.title,
+                "message": item.message,
+                "created_at": item.created_at,
+                "view": item.target_view,
+                "target_id": item.target_id,
+                "is_read": item.is_read,
+            }
+            for item in db.scalars(
+                select(Notification)
+                .where(Notification.user_id == user.id)
+                .order_by(Notification.created_at.desc(), Notification.id.desc())
+            )
+        ]
+
+    @application.patch("/notifications/{notification_id}/read", tags=["notifications"])
+    def mark_notification_read(
+        notification_id: int,
+        db: DbSession,
+        user: NOTIFICATION_USER,
+    ) -> dict[str, str]:
+        item = db.scalar(
+            select(Notification).where(
+                Notification.id == notification_id,
+                Notification.user_id == user.id,
+            )
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Notification not found.")
+        if not item.is_read:
+            item.is_read = True
+            db.commit()
+        return {"status": "read"}
+
+    @application.post("/notifications/read-all", tags=["notifications"])
+    def mark_all_notifications_read(
+        db: DbSession,
+        user: NOTIFICATION_USER,
+    ) -> dict[str, int]:
+        result = db.execute(
+            update(Notification)
+            .where(
+                Notification.user_id == user.id,
+                Notification.is_read.is_(False),
+            )
+            .values(is_read=True)
+        )
+        db.commit()
+        return {"updated": result.rowcount or 0}
 
     @application.get("/reports/summary", tags=["reports"])
     def report_summary(
@@ -1935,9 +2318,13 @@ def create_app(
         teacher_id: int,
         payload: ChangeRequestCreate,
         db: DbSession,
-        actor: HR_USER,
+        actor: Annotated[User, Depends(require_roles("hr", "lecturer"))],
     ) -> dict[str, Any]:
-        teacher = _require_teacher(db, teacher_id)
+        teacher = (
+            _require_teacher_access(db, actor, teacher_id)
+            if actor.role == "lecturer"
+            else _require_teacher(db, teacher_id)
+        )
         _validate_proposed_change(db, payload.proposed_value)
         current_value = {
             field: getattr(teacher, field) for field in payload.proposed_value
@@ -1953,15 +2340,36 @@ def create_app(
         )
         db.add(request_item)
         db.flush()
-        db.add(
-            ChangeRequestEvent(
-                change_request_id=request_item.id,
-                actor_id=actor.id,
-                event_type="submitted",
-                note=payload.reason,
-            )
+        submitted_event = ChangeRequestEvent(
+            change_request_id=request_item.id,
+            actor_id=actor.id,
+            event_type="submitted",
+            note=payload.reason,
         )
+        db.add(submitted_event)
+        db.flush()
         record_audit(db, actor, "change_request_created", "change_request", request_item.id)
+        event_key = f"change-request-event:{submitted_event.id}"
+        if actor.role == "lecturer":
+            _notify_roles(
+                db,
+                ("hr",),
+                event_key,
+                "Giảng viên gửi yêu cầu thay đổi",
+                f"{teacher.full_name} gửi yêu cầu #{request_item.id} ({request_item.change_type}).",
+                "info",
+                "changes",
+                request_item.id,
+            )
+        _notify_managers(
+            db,
+            {teacher.department_id},
+            event_key,
+            "Đề xuất nhân sự cần xem xét",
+            f"Yêu cầu #{request_item.id} ({request_item.change_type}) của {teacher.full_name} đang chờ xử lý.",
+            "changes",
+            request_item.id,
+        )
         db.commit()
         db.refresh(request_item)
         return _change_request_response(request_item, teacher)
@@ -1973,7 +2381,7 @@ def create_app(
     )
     def list_change_requests(
         db: DbSession,
-        actor: Annotated[User, Depends(require_roles("hr", "manager"))],
+        actor: Annotated[User, Depends(require_roles("hr", "manager", "lecturer"))],
         state_filter: str | None = Query(
             default=None,
             alias="status",
@@ -1982,9 +2390,21 @@ def create_app(
     ) -> list[dict[str, Any]]:
         statement = select(ChangeRequest)
         if actor.role == "hr":
+            lecturer_ids = select(User.id).where(User.role == "lecturer")
+            statement = statement.where(
+                or_(
+                    ChangeRequest.requester_id == actor.id,
+                    ChangeRequest.requester_id.in_(lecturer_ids),
+                )
+            )
+        elif actor.role == "lecturer":
             statement = statement.where(ChangeRequest.requester_id == actor.id)
-        elif state_filter is None:
-            statement = statement.where(ChangeRequest.status == "pending")
+        else:
+            if state_filter is None:
+                statement = statement.where(ChangeRequest.status == "pending")
+            statement = statement.join(
+                Teacher, ChangeRequest.teacher_id == Teacher.id
+            ).where(Teacher.department_id.in_(actor.managed_department_ids))
         if state_filter:
             statement = statement.where(ChangeRequest.status == state_filter)
         items = list(db.scalars(statement.order_by(ChangeRequest.created_at.desc())))
@@ -2010,13 +2430,15 @@ def create_app(
         request_id: int,
         payload: ChangeRequestUpdate,
         db: DbSession,
-        actor: HR_USER,
+        actor: Annotated[User, Depends(require_roles("hr", "lecturer"))],
     ) -> dict[str, Any]:
         item = db.get(ChangeRequest, request_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Change request not found.")
         if item.requester_id != actor.id:
             raise HTTPException(status_code=403, detail="Only the requester can provide additional information.")
+        if actor.role == "lecturer" and item.teacher_id != actor.teacher_id:
+            raise HTTPException(status_code=404, detail="Change request not found.")
         if item.status != "needs_info":
             raise HTTPException(status_code=409, detail="This request is not awaiting additional information.")
         _validate_proposed_change(db, payload.proposed_value)
@@ -2032,15 +2454,36 @@ def create_app(
         item.processor_id = None
         item.processed_at = None
         item.resolution_reason = None
-        db.add(
-            ChangeRequestEvent(
-                change_request_id=item.id,
-                actor_id=actor.id,
-                event_type="resubmitted",
-                note=payload.reason,
-            )
+        resubmitted_event = ChangeRequestEvent(
+            change_request_id=item.id,
+            actor_id=actor.id,
+            event_type="resubmitted",
+            note=payload.reason,
         )
+        db.add(resubmitted_event)
+        db.flush()
         record_audit(db, actor, "change_request_resubmitted", "change_request", item.id)
+        event_key = f"change-request-event:{resubmitted_event.id}"
+        _notify_managers(
+            db,
+            {teacher.department_id},
+            event_key,
+            "Yêu cầu nhân sự đã được bổ sung",
+            f"Yêu cầu #{item.id} của {teacher.full_name} đã được gửi lại để xem xét.",
+            "changes",
+            item.id,
+        )
+        if actor.role == "lecturer":
+            _notify_roles(
+                db,
+                ("hr",),
+                event_key,
+                "Giảng viên đã bổ sung yêu cầu thay đổi",
+                f"{teacher.full_name} đã bổ sung yêu cầu #{item.id}.",
+                "info",
+                "changes",
+                item.id,
+            )
         db.commit()
         db.refresh(item)
         return _change_request_response(item, teacher)
@@ -2064,6 +2507,9 @@ def create_app(
         if item.requester_id == actor.id:
             raise HTTPException(status_code=403, detail="You cannot approve or process your own request.")
         teacher = _require_teacher(db, item.teacher_id)
+        if teacher.department_id not in set(actor.managed_department_ids):
+            raise HTTPException(status_code=403, detail="This request is outside your assigned departments.")
+        previous_department_id = json.loads(item.current_value).get("department_id")
         claimed = db.execute(
             update(ChangeRequest)
             .where(ChangeRequest.id == request_id, ChangeRequest.status == "pending")
@@ -2083,14 +2529,14 @@ def create_app(
             item.status = "rejected"
         else:
             item.status = "needs_info"
-        db.add(
-            ChangeRequestEvent(
-                change_request_id=item.id,
-                actor_id=actor.id,
-                event_type=payload.action,
-                note=payload.reason,
-            )
+        decision_event = ChangeRequestEvent(
+            change_request_id=item.id,
+            actor_id=actor.id,
+            event_type=payload.action,
+            note=payload.reason,
         )
+        db.add(decision_event)
+        db.flush()
         record_audit(
             db,
             actor,
@@ -2099,6 +2545,54 @@ def create_app(
             item.id,
             details={"teacher_id": item.teacher_id},
         )
+        event_key = f"change-request-event:{decision_event.id}"
+        requester = db.get(User, item.requester_id)
+        notification_title = {
+            "approved": "Yêu cầu thay đổi đã được duyệt",
+            "rejected": "Yêu cầu thay đổi bị từ chối",
+            "needs_info": "Yêu cầu thay đổi cần bổ sung",
+        }[item.status]
+        notification_level = {
+            "approved": "success",
+            "rejected": "danger",
+            "needs_info": "warning",
+        }[item.status]
+        if requester is not None and requester.role in {"hr", "lecturer"}:
+            _create_notification(
+                db,
+                requester.id,
+                event_key,
+                notification_title,
+                f"Yêu cầu #{item.id} ({item.change_type})."
+                + (f" Lý do: {item.resolution_reason}" if item.resolution_reason else ""),
+                notification_level,
+                "changes" if requester.role == "hr" else "lecturer",
+                item.id,
+            )
+        affected_department_ids = {teacher.department_id}
+        if previous_department_id is not None:
+            affected_department_ids.add(int(previous_department_id))
+        _notify_managers(
+            db,
+            affected_department_ids,
+            event_key,
+            "Thay đổi nhân sự thuộc đơn vị phụ trách",
+            f"Yêu cầu #{item.id} của {teacher.full_name} đã được {notification_title.lower()}.",
+            "reports",
+            teacher.id,
+            exclude_user_id=actor.id,
+        )
+        if requester is None or requester.role != "lecturer":
+            _notify_lecturer(
+                db,
+                teacher.id,
+                event_key,
+                notification_title,
+                f"Yêu cầu #{item.id} ({item.change_type})."
+                + (f" Lý do: {item.resolution_reason}" if item.resolution_reason else ""),
+                notification_level,
+                target_id=teacher.id,
+            )
         db.commit()
         db.refresh(item)
         return _change_request_response(item, teacher)
@@ -2110,13 +2604,21 @@ def create_app(
     def list_change_request_events(
         request_id: int,
         db: DbSession,
-        actor: Annotated[User, Depends(require_roles("hr", "manager"))],
+        actor: Annotated[User, Depends(require_roles("hr", "manager", "lecturer"))],
     ) -> list[dict[str, Any]]:
         item = db.get(ChangeRequest, request_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Change request not found.")
-        if actor.role == "hr" and item.requester_id != actor.id:
-            raise HTTPException(status_code=403, detail="You can only view your own requests.")
+        if actor.role == "hr":
+            requester = db.get(User, item.requester_id)
+            if item.requester_id != actor.id and requester.role != "lecturer":
+                raise HTTPException(status_code=403, detail="You can only view relevant requests.")
+        elif actor.role == "lecturer" and item.requester_id != actor.id:
+            raise HTTPException(status_code=404, detail="Change request not found.")
+        elif actor.role == "manager":
+            teacher = db.get(Teacher, item.teacher_id)
+            if teacher.department_id not in set(actor.managed_department_ids):
+                raise HTTPException(status_code=403, detail="This request is outside your assigned departments.")
         events = db.scalars(
             select(ChangeRequestEvent)
             .where(ChangeRequestEvent.change_request_id == request_id)
@@ -2137,6 +2639,7 @@ def create_app(
     def list_audit_logs(
         db: DbSession,
         _: ADMIN_USER,
+        response: Response,
         actor_id: int | None = Query(default=None, gt=0),
         action: str | None = Query(default=None, min_length=1, max_length=80),
         start_date: date | None = None,
@@ -2153,6 +2656,10 @@ def create_app(
             statement = statement.where(func.date(AuditLog.created_at) >= start_date.isoformat())
         if end_date:
             statement = statement.where(func.date(AuditLog.created_at) <= end_date.isoformat())
+        total = db.scalar(
+            select(func.count()).select_from(statement.order_by(None).subquery())
+        ) or 0
+        response.headers["X-Total-Count"] = str(total)
         logs = db.scalars(
             statement.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit)
         )

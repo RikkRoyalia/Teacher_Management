@@ -186,7 +186,7 @@
             <svg class="ico"><use href="#i-users" /></svg>
             <span>Hồ sơ giảng viên</span>
           </button>
-          <div class="nav-label" data-roles="hr,manager">
+          <div class="nav-label" data-roles="hr,manager,lecturer">
             QUẢN LÝ &amp; BÁO CÁO
           </div>
           <button
@@ -201,7 +201,7 @@
           <button
             class="nav-link"
             data-view="changes"
-            data-roles="hr,manager"
+            data-roles="hr,manager,lecturer"
             type="button"
           >
             <svg class="ico"><use href="#i-chat" /></svg>
@@ -255,7 +255,7 @@
           </div>
           <div class="topbar-actions">
             <span class="topbar-date" id="today-date"></span>
-            <div class="menu-wrap" data-roles="admin,hr,manager">
+            <div class="menu-wrap" data-roles="admin,hr,manager,lecturer">
               <button
                 class="top-icon"
                 id="notif-button"
@@ -659,6 +659,10 @@
               <option value="">Chọn hồ sơ</option>
             </select></label
           >
+          <label class="form-field hidden" id="account-manager-departments-field"
+            ><span>Đơn vị phụ trách (có thể chọn nhiều)</span
+            ><select name="managed_department_ids" multiple size="4"></select>
+          </label>
           <div
             class="form-error hidden"
             id="account-form-error"

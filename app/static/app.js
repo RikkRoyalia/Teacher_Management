@@ -1273,7 +1273,11 @@ async function renderChanges() {
           actionButton("Yêu cầu bổ sung", "request-info", item.id),
         );
       }
-      if (state.user.role === "hr" && item.status === "needs_info") {
+      if (
+        ["hr", "lecturer"].includes(state.user.role) &&
+        item.requester_id === state.user.id &&
+        item.status === "needs_info"
+      ) {
         actions.append(actionButton("Bổ sung", "resubmit-change", item.id));
       }
       return [
@@ -1290,11 +1294,18 @@ async function renderChanges() {
       ];
     }),
   );
-  if (state.user.role === "hr") {
+  if (["hr", "lecturer"].includes(state.user.role)) {
+    const teachersForRequest =
+      state.user.role === "hr"
+        ? state.teachers
+        : [await api("/lecturer/profile")];
+    const departmentsForRequest =
+      state.user.role === "hr" ? state.departments : await api("/departments");
     const teacherSelect = document.createElement("select");
     teacherSelect.required = true;
-    teacherSelect.append(new Option("Chọn giảng viên", ""));
-    state.teachers.forEach((teacher) =>
+    if (state.user.role === "hr")
+      teacherSelect.append(new Option("Chọn giảng viên", ""));
+    teachersForRequest.forEach((teacher) =>
       teacherSelect.add(
         new Option(
           `${teacher.employee_code} — ${teacher.full_name}`,
@@ -1302,6 +1313,10 @@ async function renderChanges() {
         ),
       ),
     );
+    if (state.user.role === "lecturer") {
+      teacherSelect.value = String(teachersForRequest[0].id);
+      teacherSelect.disabled = true;
+    }
     const field = document.createElement("select");
     field.name = "field";
     field.required = true;
@@ -1323,7 +1338,7 @@ async function renderChanges() {
       next.append(new Option("Chọn giá trị", ""));
       let options;
       if (field.value === "department_id") {
-        options = state.departments.map((department) => [
+        options = departmentsForRequest.map((department) => [
           String(department.id),
           `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
         ]);
@@ -1336,7 +1351,7 @@ async function renderChanges() {
       } else {
         const standardValues =
           field.value === "academic_degree" ? academicDegrees : academicTitles;
-        const existingValues = state.teachers
+        const existingValues = teachersForRequest
           .map((teacher) => teacher[field.value])
           .filter(Boolean);
         options = [...new Set([...standardValues, ...existingValues])].map(
@@ -1383,7 +1398,7 @@ async function renderChanges() {
       const value = ["department_id"].includes(fieldName)
         ? Number(proposedValue)
         : proposedValue;
-      const current = state.teachers.find(
+      const current = teachersForRequest.find(
         (teacher) => teacher.id === Number(teacherSelect.value),
       );
       submit.disabled = true;
@@ -1558,7 +1573,13 @@ async function renderReports() {
 }
 
 async function renderAccounts() {
-  const users = await api("/users");
+  const [users, managerDepartments] = await Promise.all([
+    api("/users"),
+    api("/users/manager-departments"),
+  ]);
+  const departmentNames = new Map(
+    managerDepartments.map((department) => [department.id, department.name]),
+  );
   state.users = users;
   const activeUsers = users.filter((user) => user.is_active);
   const statistics = makeElement("div", "stats-grid account-stats");
@@ -1617,6 +1638,23 @@ async function renderAccounts() {
       ["lecturer", "Giảng viên"],
     ],
   });
+  const managerDepartmentField = inputField({
+    name: "managed_department_ids",
+    label: "Đơn vị phụ trách (có thể chọn nhiều)",
+    type: "select",
+    options: managerDepartments.map((department) => [
+      String(department.id),
+      `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
+    ]),
+  });
+  const managerDepartmentSelect =
+    managerDepartmentField.querySelector("select");
+  managerDepartmentSelect.multiple = true;
+  managerDepartmentSelect.size = Math.min(
+    Math.max(managerDepartments.length, 2),
+    5,
+  );
+  managerDepartmentField.classList.add("hidden");
   const linkableTeachers = await api("/users/linkable-teachers");
   const teacherLink = inputField({
     name: "teacher_id",
@@ -1633,10 +1671,21 @@ async function renderAccounts() {
     const isLecturer = role.querySelector("select").value === "lecturer";
     teacherLink.classList.toggle("hidden", !isLecturer);
     teacherLink.querySelector("select").required = isLecturer;
+    managerDepartmentField.classList.toggle(
+      "hidden",
+      role.querySelector("select").value !== "manager",
+    );
   };
   role.querySelector("select").addEventListener("change", syncCreateTeacherLink);
   syncCreateTeacherLink();
-  createForm.append(username, fullName, password, role, teacherLink);
+  createForm.append(
+    username,
+    fullName,
+    password,
+    role,
+    teacherLink,
+    managerDepartmentField,
+  );
   addPasswordToggle(password.querySelector("input"));
   const createButton = makeElement(
     "button",
@@ -1649,6 +1698,12 @@ async function renderAccounts() {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries(new FormData(form));
+    values.managed_department_ids =
+      values.role === "manager"
+        ? [...managerDepartmentSelect.selectedOptions].map((option) =>
+            Number(option.value),
+          )
+        : [];
     if (values.role === "lecturer") {
       values.teacher_id = Number(values.teacher_id);
     } else {
@@ -1708,6 +1763,7 @@ async function renderAccounts() {
         "Tên tài khoản",
         "Họ tên",
         "Vai trò",
+        "Đơn vị phụ trách",
         "Trạng thái",
         "Tạo lúc",
         "Thao tác",
@@ -1716,6 +1772,10 @@ async function renderAccounts() {
         user.username,
         user.full_name,
         roleLabels[user.role] || user.role,
+        (user.managed_department_ids || [])
+          .map((id) => departmentNames.get(id))
+          .filter(Boolean)
+          .join(", ") || "—",
         badge(
           user.is_active ? "active" : "ended",
           user.is_active ? "Đang hoạt động" : "Đã khóa",
@@ -1739,6 +1799,26 @@ async function openAccountModal(user) {
   form.elements.username.value = user.username;
   form.elements.full_name.value = user.full_name;
   form.elements.role.value = user.role;
+  const managerDepartmentSelect = form.elements.managed_department_ids;
+  const managerDepartmentField = $("#account-manager-departments-field");
+  const managerDepartments = await api("/users/manager-departments");
+  managerDepartmentSelect.replaceChildren(
+    ...managerDepartments.map(
+      (department) =>
+        new Option(
+          `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
+          String(department.id),
+        ),
+    ),
+  );
+  const assignedDepartmentIds = new Set(user.managed_department_ids || []);
+  [...managerDepartmentSelect.options].forEach((option) => {
+    option.selected = assignedDepartmentIds.has(Number(option.value));
+  });
+  managerDepartmentSelect.size = Math.min(
+    Math.max(managerDepartments.length, 2),
+    5,
+  );
   const teacherSelect = form.elements.teacher_id;
   const linkField = $("#account-teacher-link-field");
   const teachers = await api(`/users/linkable-teachers?user_id=${user.id}`);
@@ -1756,6 +1836,10 @@ async function openAccountModal(user) {
     const isLecturer = form.elements.role.value === "lecturer";
     linkField.classList.toggle("hidden", !isLecturer);
     teacherSelect.required = isLecturer;
+    managerDepartmentField.classList.toggle(
+      "hidden",
+      form.elements.role.value !== "manager",
+    );
   };
   form.elements.role.onchange = syncEditTeacherLink;
   syncEditTeacherLink();
@@ -1821,9 +1905,14 @@ async function renderAudit() {
   const submit = makeElement("button", "button button-primary", "Tìm kiếm");
   submit.type = "submit";
   form.append(submit);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const params = new URLSearchParams({ limit: "200" });
+  let requestId = 0;
+  const drawRows = async (page = 1) => {
+    const currentRequestId = ++requestId;
+    const pageSize = 20;
+    const params = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String((page - 1) * pageSize),
+    });
     for (const [name, control] of [
       ["actor_id", actorId.querySelector("input")],
       ["action", action.querySelector("input")],
@@ -1833,7 +1922,12 @@ async function renderAudit() {
       if (control.value) params.set(name, control.value);
     }
     try {
-      const entries = await api(`/audit-logs?${params}`);
+      const result = await apiWithMeta(`/audit-logs?${params}`);
+      if (currentRequestId !== requestId) return;
+      const entries = result.data;
+      const total = Number(result.headers.get("X-Total-Count"));
+      if (!Array.isArray(entries) || !Number.isInteger(total) || total < 0)
+        throw new Error("Phản hồi phân trang nhật ký hoạt động không hợp lệ.");
       setTable(
         [
           "Thời gian",
@@ -1853,14 +1947,19 @@ async function renderAudit() {
           item.outcome,
           JSON.stringify(item.details || {}),
         ]),
-        { pageSize: 20 },
+        { pageSize, page, total, onPageChange: drawRows },
       );
     } catch (error) {
+      if (currentRequestId !== requestId) return;
       showToast(error.message, true);
     }
+  };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    drawRows();
   });
   $("#workspace-filters").append(form);
-  form.requestSubmit();
+  drawRows();
 }
 
 function inputField(config) {
@@ -2145,6 +2244,18 @@ function bindEvents() {
         form.elements.role.value === "lecturer"
           ? Number(form.elements.teacher_id.value)
           : null,
+      managed_department_ids:
+        form.elements.role.value === "manager"
+          ? [...form.elements.managed_department_ids.selectedOptions].map(
+              (option) => Number(option.value),
+            )
+          : [],
+      managed_department_ids:
+        form.elements.role.value === "manager"
+          ? [...form.elements.managed_department_ids.selectedOptions].map(
+              (option) => Number(option.value),
+            )
+          : [],
     };
     try {
       await updateAccount(userId, payload);
@@ -2313,13 +2424,21 @@ function bindEvents() {
           const currentRequests = await api("/change-requests");
           const change = currentRequests.find((item) => item.id === id);
           if (!change) break;
+          const departmentsForRequest =
+            state.user.role === "lecturer"
+              ? await api("/departments")
+              : state.departments;
+          const teachersForRequest =
+            state.user.role === "lecturer"
+              ? [await api("/lecturer/profile")]
+              : state.teachers;
           const entries = Object.entries(change.proposed_value || {});
           if (!entries.length)
             throw new Error("Yêu cầu không có nội dung đề xuất để cập nhật.");
           const fields = entries.map(([key, value]) => {
             let options = null;
             if (key === "department_id") {
-              options = state.departments.map((department) => [
+              options = departmentsForRequest.map((department) => [
                 department.id,
                 `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
               ]);
@@ -2335,7 +2454,7 @@ function bindEvents() {
               options = [
                 ...new Set([
                   ...defaults,
-                  ...state.teachers.map((teacher) => teacher[key]).filter(Boolean),
+                  ...teachersForRequest.map((teacher) => teacher[key]).filter(Boolean),
                   String(value),
                 ]),
               ].map((option) => [option, option]);
@@ -3133,40 +3252,23 @@ async function drawDetailTab(teacher) {
   }
 }
 
-const seenKey = () => `neu-notifications-${state.user?.id}`;
-function seenIds() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem(seenKey()) || "[]"));
-  } catch {
-    return new Set();
-  }
-}
-function saveSeen(ids) {
-  try {
-    localStorage.setItem(seenKey(), JSON.stringify([...ids].slice(-200)));
-  } catch {
-    /* lưu trữ cục bộ không khả dụng */
-  }
-}
-
 async function loadNotifications() {
   if (!state.user) return;
   try {
+    await api("/notifications/refresh", { method: "POST" });
     state.notifications = await api("/notifications");
-  } catch {
-    state.notifications = [];
+  } catch (error) {
+    showToast(`Không thể tải thông báo: ${error.message}`, true);
+    return;
   }
   drawNotifications();
 }
 
 function drawNotifications() {
   if (!state.user) return;
-  const seen = seenIds();
   const list = $("#notif-list");
   list.replaceChildren();
-  const unread = state.notifications.filter(
-    (item) => !seen.has(item.id),
-  ).length;
+  const unread = state.notifications.filter((item) => !item.is_read).length;
   const counter = $("#notif-count");
   counter.textContent = unread > 9 ? "9+" : String(unread);
   counter.classList.toggle("hidden", unread === 0);
@@ -3177,12 +3279,13 @@ function drawNotifications() {
   for (const item of state.notifications) {
     const entry = makeElement(
       "button",
-      `notif-item${seen.has(item.id) ? "" : " unread"}`,
+      `notif-item${item.is_read ? "" : " unread"}`,
     );
     entry.type = "button";
     entry.dataset.action = "notif-open";
     entry.dataset.view = item.view;
     entry.dataset.notif = item.id;
+    if (item.target_id) entry.dataset.targetId = item.target_id;
     entry.append(
       makeElement("strong", "", item.title),
       makeElement("span", "", item.message),
@@ -3193,7 +3296,8 @@ function drawNotifications() {
 
 function startNotifications() {
   stopNotifications();
-  if (!["admin", "hr", "manager"].includes(state.user?.role)) return;
+  if (!["admin", "hr", "manager", "lecturer"].includes(state.user?.role))
+    return;
   loadNotifications();
   state.notifTimer = window.setInterval(loadNotifications, 60000);
 }
@@ -3202,6 +3306,8 @@ function stopNotifications() {
   if (state.notifTimer) window.clearInterval(state.notifTimer);
   state.notifTimer = null;
   state.notifications = [];
+  $("#notif-count").textContent = "0";
+  $("#notif-count").classList.add("hidden");
 }
 
 function applyTheme() {
@@ -3262,10 +3368,16 @@ function bindNewEvents() {
     if (!event.target.closest("#notif-button, #user-button, #notif-panel"))
       closeMenus();
   });
-  $("#notif-read").addEventListener("click", () => {
-    const seen = seenIds();
-    state.notifications.forEach((item) => seen.add(item.id));
-    saveSeen(seen);
+  $("#notif-read").addEventListener("click", async () => {
+    try {
+      await api("/notifications/read-all", { method: "POST" });
+      state.notifications.forEach((item) => {
+        item.is_read = true;
+      });
+    } catch (error) {
+      showToast(`Không thể cập nhật thông báo: ${error.message}`, true);
+      return;
+    }
     drawNotifications();
   });
   $("#scrim").addEventListener("click", () =>
@@ -3360,12 +3472,25 @@ function bindNewEvents() {
           navigate(button.dataset.view);
           break;
         case "notif-open": {
-          const seen = seenIds();
-          seen.add(button.dataset.notif);
-          saveSeen(seen);
+          await api(`/notifications/${button.dataset.notif}/read`, {
+            method: "PATCH",
+          });
+          const notification = state.notifications.find(
+            (item) => String(item.id) === button.dataset.notif,
+          );
+          if (notification) notification.is_read = true;
           drawNotifications();
           closeMenus();
-          navigate(button.dataset.view);
+          if (
+            button.dataset.view === "teacherDetail" &&
+            button.dataset.targetId &&
+            state.user.role === "hr"
+          ) {
+            state.selectedTeacherId = button.dataset.targetId;
+            await navigate("teacherDetail");
+          } else {
+            await navigate(button.dataset.view);
+          }
           break;
         }
         case "page-prev":

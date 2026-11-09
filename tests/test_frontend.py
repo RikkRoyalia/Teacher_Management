@@ -11,7 +11,14 @@ from pathlib import Path
 import uvicorn
 
 from app.main import create_app
-from app.models import ChecklistItem, Department, Teacher, User
+from app.models import (
+    ChecklistItem,
+    Department,
+    ManagerDepartmentAssignment,
+    Notification,
+    Teacher,
+    User,
+)
 from app.security import hash_password
 
 PLAYWRIGHT_AVAILABLE = importlib.util.find_spec("playwright") is not None
@@ -64,12 +71,28 @@ class FrontendBrowserTests(unittest.TestCase):
 
         with cls.app.state.session_factory() as db:
             password = "Browser test password 2048!"
+            hr_user = User(
+                username="browser-hr",
+                full_name="Browser HR",
+                password_hash=hash_password(password),
+                role="hr",
+            )
+            manager_user = User(
+                username="browser-manager",
+                full_name="Browser Manager",
+                password_hash=hash_password(password),
+                role="manager",
+            )
+            db.add_all([hr_user, manager_user])
+            db.flush()
             db.add(
-                User(
-                    username="browser-hr",
-                    full_name="Browser HR",
-                    password_hash=hash_password(password),
-                    role="hr",
+                Notification(
+                    user_id=hr_user.id,
+                    event_key="browser-notification",
+                    title="Thông báo kiểm thử giao diện",
+                    message="Thông báo phải được tải từ máy chủ.",
+                    level="info",
+                    target_view="overview",
                 )
             )
             department = Department(code="UI-TEST", name="Browser test unit")
@@ -83,6 +106,12 @@ class FrontendBrowserTests(unittest.TestCase):
             )
             db.add(checklist_item)
             db.flush()
+            db.add(
+                ManagerDepartmentAssignment(
+                    manager_id=manager_user.id,
+                    department_id=department.id,
+                )
+            )
             db.add_all(
                 Teacher(
                     employee_code=f"UI-{index:03d}",
@@ -140,13 +169,37 @@ class FrontendBrowserTests(unittest.TestCase):
         ).to_have_value("UI Lecturer 003")
 
     def test_report_explains_date_filter_scope(self) -> None:
-        self.page.locator('[data-view="reports"]').click()
-        expect(self.page.locator("#workspace-filters")).to_contain_text(
-            "Ngày tạo hồ sơ từ"
+        manager_page = self.browser.new_page()
+        try:
+            manager_page.goto(self.base_url)
+            manager_page.locator('#login-form [name="username"]').fill(
+                "browser-manager"
+            )
+            manager_page.locator('#login-form [name="password"]').fill(self.password)
+            manager_page.locator("#login-form button[type=submit]").click()
+            expect(manager_page.locator("#profile-role")).to_have_text("Người quản lý")
+            manager_page.locator('.nav-link[data-view="reports"]').click()
+            expect(manager_page.locator("#workspace-filters")).to_contain_text(
+                "Ngày tạo hồ sơ từ"
+            )
+            expect(manager_page.locator("#workspace-filters")).to_contain_text(
+                "trong nhóm hồ sơ đã lọc"
+            )
+        finally:
+            manager_page.close()
+
+    def test_notification_bell_shows_persistent_items_and_marks_them_read(
+        self,
+    ) -> None:
+        badge = self.page.locator("#notif-count")
+        expect(badge).to_be_visible()
+        self.page.locator("#notif-button").click()
+        notification = self.page.locator(
+            '[data-action="notif-open"][data-notif]'
         )
-        expect(self.page.locator("#workspace-filters")).to_contain_text(
-            "trong nhóm hồ sơ đã lọc"
-        )
+        expect(notification).to_contain_text("Thông báo kiểm thử giao diện")
+        self.page.locator("#notif-read").click()
+        expect(badge).to_have_class("notif-badge hidden")
 
     def test_checklist_edit_uses_an_in_app_form(self) -> None:
         self.page.locator('.nav-link[data-view="teachers"]').click()

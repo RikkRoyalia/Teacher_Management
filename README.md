@@ -61,6 +61,7 @@ Cookie session và CSRF tự bật thuộc tính `Secure` khi ứng dụng nhậ
 - Kết quả phân tích chỉ là gợi ý cho HR đối chiếu với tệp gốc, không xác minh tính xác thực, không đổi trạng thái duyệt/checklist và không cập nhật hồ sơ. Kết quả không được lưu; audit chỉ ghi người thực hiện, mã tài liệu, định dạng hoặc mã lỗi, không ghi nội dung trích xuất. Hiện chỉ dùng dữ liệu thử nghiệm, không dùng tài liệu nhân sự thật.
 - Danh sách phát hiện hồ sơ và cảnh báo chi tiết chỉ dành cho HR qua API; vai trò quản lý tiếp tục chỉ xem báo cáo tổng hợp theo quyền hiện có.
 - Nhật ký API không có thao tác sửa/xóa; audit ghi người dùng, thời điểm, loại thao tác, đối tượng và kết quả.
+- Thông báo được lưu theo tài khoản trong cơ sở dữ liệu, có trạng thái đã đọc/chưa đọc; Manager chỉ nhận thông báo nhân sự trong các đơn vị được Admin gán ở phần quản trị tài khoản.
 
 ## Dữ liệu mẫu
 

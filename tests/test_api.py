@@ -16,11 +16,13 @@ from app.main import create_app
 from app.models import (
     AuditLog,
     ChecklistItem,
+    Department,
     EmploymentContract,
     EvidenceDocument,
     Teacher,
     TeacherChecklistRequirement,
     User,
+    WorkHistory,
 )
 from app.security import SESSION_COOKIE, hash_password
 from scripts.seed_demo import Api, ensure_lecturer_accounts
@@ -59,6 +61,13 @@ class TeacherManagementApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201, response.text)
         self.department_id = response.json()["id"]
+        with self.client.app.state.session_factory() as db:
+            manager = db.scalar(select(User).where(User.username == "manager"))
+            department = db.get(Department, self.department_id)
+            self.assertIsNotNone(manager)
+            self.assertIsNotNone(department)
+            manager.managed_departments = [department]
+            db.commit()
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)
@@ -134,6 +143,31 @@ class TeacherManagementApiTests(unittest.TestCase):
             self.assertEqual(unauthenticated.get("/teachers").status_code, 401)
         finally:
             unauthenticated.close()
+
+    def test_login_activity_is_recorded_from_independent_browser_session(self) -> None:
+        incognito_client = TestClient(self.client.app)
+        login_response = incognito_client.post(
+            "/auth/login",
+            json={
+                "username": "hr",
+                "password": "Correct horse battery staple 2048!",
+            },
+        )
+        self.assertEqual(login_response.status_code, 200, login_response.text)
+
+        with self.client.app.state.session_factory() as db:
+            hr_user = db.scalar(select(User).where(User.username == "hr"))
+            self.assertIsNotNone(hr_user)
+            hr_user_id = hr_user.id
+
+        admin = self.login("admin")
+        audit_response = self.client.get(
+            "/audit-logs",
+            params={"actor_id": hr_user_id, "action": "login"},
+            headers={"X-CSRF-Token": str(admin["csrf_token"])},
+        )
+        self.assertEqual(audit_response.status_code, 200, audit_response.text)
+        self.assertTrue(audit_response.json())
 
     def test_create_filter_and_duplicate_teacher_code(self) -> None:
         created = self.create_teacher()
@@ -409,7 +443,7 @@ class TeacherManagementApiTests(unittest.TestCase):
             self.client.get("/lecturer/profile").json()["department_name"],
             "Information Technology",
         )
-        self.assertEqual(self.client.get("/notifications").status_code, 403)
+        self.assertEqual(self.client.get("/notifications").status_code, 200)
         self.assertEqual(self.client.get("/teachers").status_code, 403)
         self.assertEqual(
             self.client.get(f"/teachers/{other_teacher_id}/documents").status_code,
@@ -442,6 +476,7 @@ class TeacherManagementApiTests(unittest.TestCase):
             ).status_code,
             404,
         )
+
         self.assertEqual(
             self.client.post("/auth/logout", headers=self.headers()).status_code,
             200,
@@ -602,6 +637,454 @@ class TeacherManagementApiTests(unittest.TestCase):
                     )
                 )
             )
+
+    def test_notifications_are_persistent_available_to_all_roles_and_private(self) -> None:
+        teacher = self.create_teacher().json()
+        teacher_id = teacher["id"]
+        with TestClient(self.client.app) as admin_client:
+            admin_response = admin_client.post(
+                "/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "Correct horse battery staple 2048!",
+                },
+            )
+            self.assertEqual(admin_response.status_code, 200, admin_response.text)
+            admin_session = admin_response.json()
+            admin_headers = {"X-CSRF-Token": admin_session["csrf_token"]}
+            users = admin_client.get("/users").json()
+            manager_user = next(user for user in users if user["role"] == "manager")
+            assigned = admin_client.patch(
+                f"/users/{manager_user['id']}",
+                json={"managed_department_ids": [self.department_id]},
+                headers=admin_headers,
+            )
+            self.assertEqual(assigned.status_code, 200, assigned.text)
+            self.assertEqual(
+                assigned.json()["managed_department_ids"], [self.department_id]
+            )
+            account = admin_client.post(
+                "/users",
+                json={
+                    "username": "notification-lecturer",
+                    "full_name": "Notification Lecturer",
+                    "password": "Another safe password 456!",
+                    "role": "lecturer",
+                    "teacher_id": teacher_id,
+                },
+                headers=admin_headers,
+            )
+            self.assertEqual(account.status_code, 201, account.text)
+            admin_notifications = admin_client.get("/notifications")
+            self.assertEqual(admin_notifications.status_code, 200)
+            self.assertIn(
+                "Hồ sơ giảng viên mới",
+                [item["title"] for item in admin_notifications.json()],
+            )
+            self.assertEqual(
+                admin_client.post(
+                    "/notifications/refresh", headers=admin_headers
+                ).status_code,
+                200,
+            )
+
+            with TestClient(self.client.app) as manager_client:
+                manager_response = manager_client.post(
+                    "/auth/login",
+                    json={
+                        "username": "manager",
+                        "password": "Correct horse battery staple 2048!",
+                    },
+                )
+                self.assertEqual(manager_response.status_code, 200)
+                manager_headers = {
+                    "X-CSRF-Token": manager_response.json()["csrf_token"]
+                }
+                manager_notifications = manager_client.get("/notifications")
+                self.assertEqual(manager_notifications.status_code, 200)
+                self.assertIn(
+                    "Nhân sự mới thuộc đơn vị phụ trách",
+                    [item["title"] for item in manager_notifications.json()],
+                )
+                self.assertEqual(
+                    manager_client.post(
+                        "/notifications/refresh", headers=manager_headers
+                    ).status_code,
+                    200,
+                )
+
+                with TestClient(self.client.app) as lecturer_client:
+                    lecturer_response = lecturer_client.post(
+                        "/auth/login",
+                        json={
+                            "username": "notification-lecturer",
+                            "password": "Another safe password 456!",
+                        },
+                    )
+                    self.assertEqual(lecturer_response.status_code, 200)
+                    lecturer_headers = {
+                        "X-CSRF-Token": lecturer_response.json()["csrf_token"]
+                    }
+                    lecturer_notifications = lecturer_client.get("/notifications")
+                    self.assertEqual(lecturer_notifications.status_code, 200)
+                    self.assertEqual(
+                        lecturer_client.post(
+                            "/notifications/refresh", headers=lecturer_headers
+                        ).status_code,
+                        200,
+                    )
+                    account_notification = next(
+                        item
+                        for item in lecturer_notifications.json()
+                        if item["title"] == "Tài khoản giảng viên đã được cấp"
+                    )
+                    self.assertFalse(account_notification["is_read"])
+                    self.assertEqual(
+                        manager_client.patch(
+                            f"/notifications/{account_notification['id']}/read",
+                            headers=manager_headers,
+                        ).status_code,
+                        404,
+                    )
+                    marked = lecturer_client.patch(
+                        f"/notifications/{account_notification['id']}/read",
+                        headers=lecturer_headers,
+                    )
+                    self.assertEqual(marked.status_code, 200, marked.text)
+                    updated = lecturer_client.get("/notifications").json()
+                    self.assertTrue(
+                        next(
+                            item
+                            for item in updated
+                            if item["id"] == account_notification["id"]
+                        )["is_read"]
+                    )
+                    self.assertEqual(
+                        lecturer_client.post(
+                            "/notifications/read-all", headers=lecturer_headers
+                        ).status_code,
+                        200,
+                    )
+                    self.assertTrue(
+                        all(
+                            item["is_read"]
+                            for item in lecturer_client.get(
+                                "/notifications"
+                            ).json()
+                        )
+                    )
+                    self.assertEqual(
+                        self.client.get("/notifications").status_code, 200
+                    )
+                    self.assertEqual(
+                        self.client.post(
+                            "/notifications/refresh", headers=self.headers()
+                        ).status_code,
+                        200,
+                    )
+
+    def test_notification_workflows_cover_documents_changes_contracts_and_history(
+        self,
+    ) -> None:
+        teacher = self.create_teacher().json()
+        teacher_id = teacher["id"]
+        upload_checklist = self.client.post(
+            "/checklist-items",
+            json={
+                "code": "notification-upload-item",
+                "label": "Tài liệu cần rà soát",
+                "category": "qualification",
+                "classification": "required",
+                "applicability": "Áp dụng cho hồ sơ này.",
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(upload_checklist.status_code, 201, upload_checklist.text)
+        admin_context = TestClient(self.client.app)
+        manager_context = TestClient(self.client.app)
+        lecturer_context = TestClient(self.client.app)
+        with admin_context as admin_client, manager_context as manager_client, lecturer_context as lecturer_client:
+            admin_response = admin_client.post(
+                "/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "Correct horse battery staple 2048!",
+                },
+            )
+            admin_headers = {
+                "X-CSRF-Token": admin_response.json()["csrf_token"]
+            }
+            account = admin_client.post(
+                "/users",
+                json={
+                    "username": "workflow-lecturer",
+                    "full_name": "Workflow Lecturer",
+                    "password": "Another safe password 456!",
+                    "role": "lecturer",
+                    "teacher_id": teacher_id,
+                },
+                headers=admin_headers,
+            )
+            self.assertEqual(account.status_code, 201, account.text)
+
+            manager_response = manager_client.post(
+                "/auth/login",
+                json={
+                    "username": "manager",
+                    "password": "Correct horse battery staple 2048!",
+                },
+            )
+            self.assertEqual(manager_response.status_code, 200)
+            manager_headers = {
+                "X-CSRF-Token": manager_response.json()["csrf_token"]
+            }
+            lecturer_response = lecturer_client.post(
+                "/auth/login",
+                json={
+                    "username": "workflow-lecturer",
+                    "password": "Another safe password 456!",
+                },
+            )
+            self.assertEqual(lecturer_response.status_code, 200)
+            lecturer_headers = {
+                "X-CSRF-Token": lecturer_response.json()["csrf_token"]
+            }
+
+            upload = lecturer_client.post(
+                f"/teachers/{teacher_id}/documents",
+                data={"checklist_item_id": str(upload_checklist.json()["id"])},
+                files={"file": ("notification.pdf", b"%PDF-1.4\nproof", "application/pdf")},
+                headers=lecturer_headers,
+            )
+            self.assertEqual(upload.status_code, 201, upload.text)
+            hr_items = self.client.get("/notifications").json()
+            self.assertIn(
+                "Tài liệu mới chờ rà soát", [item["title"] for item in hr_items]
+            )
+
+            reviewed = self.client.patch(
+                f"/documents/{upload.json()['id']}/review",
+                json={"review_status": "rejected", "reason": "Thiếu trang ký."},
+                headers=self.headers(),
+            )
+            self.assertEqual(reviewed.status_code, 200, reviewed.text)
+            lecturer_items = lecturer_client.get("/notifications").json()
+            self.assertIn(
+                "Tài liệu cần được bổ sung",
+                [item["title"] for item in lecturer_items],
+            )
+
+            submitted = lecturer_client.post(
+                f"/teachers/{teacher_id}/change-requests",
+                json={
+                    "change_type": "Thay đổi chức danh",
+                    "proposed_value": {"academic_title": "Giảng viên chính"},
+                    "reason": "Đề nghị cập nhật chức danh.",
+                    "effective_on": (date.today() + timedelta(days=1)).isoformat(),
+                },
+                headers=lecturer_headers,
+            )
+            self.assertEqual(submitted.status_code, 201, submitted.text)
+            request_id = submitted.json()["id"]
+            self.assertIn(
+                "Giảng viên gửi yêu cầu thay đổi",
+                [item["title"] for item in self.client.get("/notifications").json()],
+            )
+            manager_items = manager_client.get("/notifications").json()
+            self.assertIn(
+                "Đề xuất nhân sự cần xem xét",
+                [item["title"] for item in manager_items],
+            )
+            manager_client.post(
+                "/notifications/refresh", headers=manager_headers
+            )
+            manager_items = manager_client.get("/notifications").json()
+            self.assertEqual(
+                sum(
+                    item["title"] == "Đề xuất nhân sự cần xem xét"
+                    and f"#{request_id}" in item["message"]
+                    for item in manager_items
+                ),
+                1,
+            )
+            decision = manager_client.post(
+                f"/change-requests/{request_id}/decision",
+                json={"action": "approve"},
+                headers=manager_headers,
+            )
+            self.assertEqual(decision.status_code, 200, decision.text)
+            self.assertIn(
+                "Yêu cầu thay đổi đã được duyệt",
+                [item["title"] for item in lecturer_client.get("/notifications").json()],
+            )
+            rejected_request = lecturer_client.post(
+                f"/teachers/{teacher_id}/change-requests",
+                json={
+                    "change_type": "Thay đổi trình độ",
+                    "proposed_value": {"academic_degree": "Doctor"},
+                    "reason": "Đề nghị cập nhật trình độ.",
+                },
+                headers=lecturer_headers,
+            )
+            self.assertEqual(
+                rejected_request.status_code, 201, rejected_request.text
+            )
+            rejected = manager_client.post(
+                f"/change-requests/{rejected_request.json()['id']}/decision",
+                json={"action": "reject", "reason": "Chưa đủ căn cứ."},
+                headers=manager_headers,
+            )
+            self.assertEqual(rejected.status_code, 200, rejected.text)
+            self.assertIn(
+                "Yêu cầu thay đổi bị từ chối",
+                [item["title"] for item in lecturer_client.get("/notifications").json()],
+            )
+            needs_info_request = lecturer_client.post(
+                f"/teachers/{teacher_id}/change-requests",
+                json={
+                    "change_type": "Thay đổi trình độ",
+                    "proposed_value": {"academic_degree": "PhD"},
+                    "reason": "Đề nghị cập nhật trình độ.",
+                },
+                headers=lecturer_headers,
+            )
+            self.assertEqual(
+                needs_info_request.status_code, 201, needs_info_request.text
+            )
+            needs_info = manager_client.post(
+                f"/change-requests/{needs_info_request.json()['id']}/decision",
+                json={"action": "request_info", "reason": "Vui lòng bổ sung minh chứng."},
+                headers=manager_headers,
+            )
+            self.assertEqual(needs_info.status_code, 200, needs_info.text)
+            self.assertIn(
+                "Yêu cầu thay đổi cần bổ sung",
+                [item["title"] for item in lecturer_client.get("/notifications").json()],
+            )
+            resubmitted = lecturer_client.patch(
+                f"/change-requests/{needs_info_request.json()['id']}",
+                json={
+                    "proposed_value": {"academic_degree": "PhD"},
+                    "reason": "Đã bổ sung minh chứng.",
+                },
+                headers=lecturer_headers,
+            )
+            self.assertEqual(resubmitted.status_code, 200, resubmitted.text)
+            self.assertIn(
+                "Giảng viên đã bổ sung yêu cầu thay đổi",
+                [item["title"] for item in self.client.get("/notifications").json()],
+            )
+
+            contract = self.client.post(
+                f"/teachers/{teacher_id}/contracts",
+                json={
+                    "contract_code": "NOTICE-001",
+                    "contract_type": "Fixed term",
+                    "starts_on": date.today().isoformat(),
+                    "ends_on": (date.today() + timedelta(days=5)).isoformat(),
+                },
+                headers=self.headers(),
+            )
+            self.assertEqual(contract.status_code, 201, contract.text)
+            for _ in range(2):
+                refreshed = self.client.post(
+                    "/notifications/refresh", headers=self.headers()
+                )
+                self.assertEqual(refreshed.status_code, 200, refreshed.text)
+            hr_items = self.client.get("/notifications").json()
+            self.assertEqual(
+                sum(
+                    item["title"] == "Hợp đồng sắp hoặc đã hết hạn"
+                    and "NOTICE-001" in item["message"]
+                    for item in hr_items
+                ),
+                1,
+            )
+
+            with self.client.app.state.session_factory() as db:
+                current_history = db.scalar(
+                    select(WorkHistory).where(
+                        WorkHistory.teacher_id == teacher_id,
+                        WorkHistory.ends_on.is_(None),
+                    )
+                )
+                current_history.ends_on = date.today() + timedelta(days=1)
+                db.commit()
+            history = self.client.post(
+                f"/teachers/{teacher_id}/work-history",
+                json={
+                    "department_id": self.department_id,
+                    "position_title": "Giảng viên",
+                    "starts_on": (date.today() + timedelta(days=2)).isoformat(),
+                    "reason": "Cập nhật quá trình công tác.",
+                },
+                headers=self.headers(),
+            )
+            self.assertEqual(history.status_code, 201, history.text)
+            self.assertIn(
+                "Quá trình công tác được cập nhật",
+                [item["title"] for item in lecturer_client.get("/notifications").json()],
+            )
+            self.assertIn(
+                "Quá trình công tác được cập nhật",
+                [item["title"] for item in manager_client.get("/notifications").json()],
+            )
+
+            checklist = self.client.post(
+                "/checklist-items",
+                json={
+                    "code": "notification-required-proof",
+                    "label": "Minh chứng bổ sung",
+                    "category": "qualification",
+                    "classification": "optional",
+                    "applicability": "Theo yêu cầu rà soát.",
+                },
+                headers=self.headers(),
+            )
+            self.assertEqual(checklist.status_code, 201, checklist.text)
+            requirement = self.client.patch(
+                f"/teachers/{teacher_id}/checklist-requirements/{checklist.json()['id']}",
+                json={"status": "required"},
+                headers=self.headers(),
+            )
+            self.assertEqual(requirement.status_code, 200, requirement.text)
+            self.assertIn(
+                "Hồ sơ cần bổ sung tài liệu",
+                [item["title"] for item in lecturer_client.get("/notifications").json()],
+            )
+
+            update = self.client.patch(
+                f"/teachers/{teacher_id}",
+                json={"phone": "0912345678"},
+                headers=self.headers(),
+            )
+            self.assertEqual(update.status_code, 200, update.text)
+            self.assertIn(
+                "Hồ sơ nhân sự được cập nhật",
+                [item["title"] for item in manager_client.get("/notifications").json()],
+            )
+            other_department = self.client.post(
+                "/departments",
+                json={"code": "OTHER", "name": "Other Department"},
+                headers=self.headers(),
+            )
+            self.assertEqual(other_department.status_code, 201, other_department.text)
+            unrelated_teacher = self.create_teacher(
+                "OTHER001", department_id=other_department.json()["id"]
+            )
+            self.assertEqual(unrelated_teacher.status_code, 201)
+            self.assertEqual(
+                self.client.patch(
+                    f"/teachers/{unrelated_teacher.json()['id']}",
+                    json={"phone": "0911111111"},
+                    headers=self.headers(),
+                ).status_code,
+                200,
+            )
+            manager_messages = [
+                item["message"] for item in manager_client.get("/notifications").json()
+            ]
+            self.assertFalse(any("OTHER001" in message for message in manager_messages))
 
     def test_demo_lecturer_seed_account_matches_existing_teacher(self) -> None:
         teacher_response = self.create_teacher(
@@ -1024,6 +1507,7 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertEqual(len(certificate_alerts), 1)
         self.assertEqual(certificate_alerts[0]["days_remaining"], 10)
         self.assertEqual(certificate_alerts[0]["status"], "expiring")
+        self.client.post("/notifications/refresh", headers=self.headers())
         notifications = self.client.get("/notifications")
         self.assertIn(
             "Chứng chỉ sắp hoặc đã hết hạn",
@@ -1153,6 +1637,44 @@ class TeacherManagementApiTests(unittest.TestCase):
             ).status_code,
             404,
         )
+
+    def test_audit_logs_return_filtered_total_for_pagination(self) -> None:
+        admin = self.login("admin")
+        with self.client.app.state.session_factory() as db:
+            admin_user = db.scalar(select(User).where(User.username == "admin"))
+            self.assertIsNotNone(admin_user)
+            db.add_all(
+                [
+                    AuditLog(
+                        actor_id=admin_user.id,
+                        action="audit_pagination_test",
+                        entity_type="test",
+                        entity_id=str(index),
+                        outcome="success",
+                    )
+                    for index in range(205)
+                ]
+            )
+            db.commit()
+
+        headers = {"X-CSRF-Token": str(admin["csrf_token"])}
+        first_page = self.client.get(
+            "/audit-logs",
+            params={"action": "audit_pagination_test", "limit": 20, "offset": 0},
+            headers=headers,
+        )
+        self.assertEqual(first_page.status_code, 200, first_page.text)
+        self.assertEqual(first_page.headers["x-total-count"], "205")
+        self.assertEqual(len(first_page.json()), 20)
+
+        last_page = self.client.get(
+            "/audit-logs",
+            params={"action": "audit_pagination_test", "limit": 20, "offset": 200},
+            headers=headers,
+        )
+        self.assertEqual(last_page.status_code, 200, last_page.text)
+        self.assertEqual(last_page.headers["x-total-count"], "205")
+        self.assertEqual(len(last_page.json()), 5)
 
     def test_password_change_invalidates_session(self) -> None:
         response = self.client.post(
