@@ -75,6 +75,7 @@ from app.schemas import (
     DepartmentUpdate,
     EvidenceDocumentRead,
     EvidenceDocumentReview,
+    LecturerProfileRead,
     LoginInput,
     PasswordChange,
     PasswordReset,
@@ -371,11 +372,22 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         response.delete_cookie(CSRF_COOKIE, path="/", samesite="strict")
         return response
 
-    @application.get("/lecturer/profile", response_model=TeacherRead, tags=["lecturers"])
-    def lecturer_profile(db: DbSession, actor: Annotated[User, Depends(require_roles("lecturer"))]) -> Teacher:
+    @application.get(
+        "/lecturer/profile",
+        response_model=LecturerProfileRead,
+        tags=["lecturers"],
+    )
+    def lecturer_profile(
+        db: DbSession,
+        actor: Annotated[User, Depends(require_roles("lecturer"))],
+    ) -> dict[str, Any]:
         if actor.teacher_id is None:
             raise HTTPException(status_code=404, detail="No teacher profile is linked to this account.")
-        return _require_teacher(db, actor.teacher_id)
+        teacher = _require_teacher(db, actor.teacher_id)
+        return {
+            **TeacherRead.model_validate(teacher).model_dump(),
+            "department_name": teacher.department.name,
+        }
 
     @application.get("/users", response_model=list[UserRead], tags=["accounts"])
     def list_users(db: DbSession, _: ADMIN_USER) -> list[User]:

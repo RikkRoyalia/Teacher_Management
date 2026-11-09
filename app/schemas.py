@@ -175,6 +175,10 @@ class TeacherRead(BaseModel):
     employment_status: str
 
 
+class LecturerProfileRead(TeacherRead):
+    department_name: str
+
+
 class QualificationCreate(InputModel):
     qualification_type: Literal["degree", "certificate", "research", "other"]
     title: str = Field(min_length=1, max_length=200)

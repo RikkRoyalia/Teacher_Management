@@ -983,7 +983,7 @@ async function renderLecturerPortal() {
   [
     ["Mã giảng viên", teacher.employee_code],
     ["Họ và tên", teacher.full_name],
-    ["Đơn vị ID", teacher.department_id],
+    ["Đơn vị công tác", teacher.department_name],
     ["Trạng thái công tác", statusLabels[teacher.employment_status]],
     ["Email", teacher.email],
     ["Số điện thoại", teacher.phone],
@@ -2997,6 +2997,7 @@ function drawNotifications() {
 
 function startNotifications() {
   stopNotifications();
+  if (!["admin", "hr", "manager"].includes(state.user?.role)) return;
   loadNotifications();
   state.notifTimer = window.setInterval(loadNotifications, 60000);
 }

@@ -278,6 +278,11 @@ class TeacherManagementApiTests(unittest.TestCase):
         self.assertEqual(
             self.client.get("/lecturer/profile").json()["id"], teacher_id
         )
+        self.assertEqual(
+            self.client.get("/lecturer/profile").json()["department_name"],
+            "Information Technology",
+        )
+        self.assertEqual(self.client.get("/notifications").status_code, 403)
         self.assertEqual(self.client.get("/teachers").status_code, 403)
         self.assertEqual(
             self.client.get(f"/teachers/{other_teacher_id}/documents").status_code,
