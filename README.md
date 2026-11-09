@@ -37,9 +37,12 @@ Lệnh bootstrap chỉ dùng để tạo tài khoản quản trị viên đầu 
 
 Quyền được kiểm tra ở API. Tác vụ thay đổi yêu cầu session cookie và CSRF token. Mật khẩu được băm PBKDF2-HMAC-SHA256; sau nhiều lần đăng nhập sai tài khoản sẽ tạm khóa.
 
+Cookie session và CSRF tự bật thuộc tính `Secure` khi ứng dụng nhận request HTTPS. Nếu TLS được kết thúc tại reverse proxy và ứng dụng nhận HTTP nội bộ, đặt `TEACHER_MANAGEMENT_COOKIE_SECURE=true` trong môi trường chạy ứng dụng để cookie vẫn chỉ được gửi qua HTTPS ở phía người dùng. Không đặt `false` khi mở ứng dụng qua mạng; cấu hình mặc định cho HTTP chỉ phục vụ chạy local.
+
 ## Lưu trữ, tài liệu và dữ liệu
 
 - Mặc định, SQLite là `teacher_management.db` tại thư mục chạy ứng dụng; có thể cấu hình `DATABASE_URL`.
+- API `GET /teachers` phân trang với `limit` (mặc định 50, tối đa 200) và `offset`; tổng số kết quả được trả trong header `X-Total-Count`. Bộ lọc ngày của báo cáo dựa trên ngày tạo hồ sơ; số hợp đồng sắp/đã hết hạn là trạng thái tính đến ngày hiện tại trong nhóm hồ sơ đã lọc.
 - Tệp minh chứng lưu trong `private_uploads/`, không được mount như tài nguyên tĩnh. HR có thể tải lên/tải xuống; giảng viên chỉ tải lên theo checklist và truy cập tài liệu thuộc hồ sơ đã liên kết. PDF, DOCX, PNG và JPEG tối đa 10 MB được chấp nhận. Tài liệu giảng viên nộp chờ HR xác nhận; tài liệu chưa được xác nhận không hoàn tất checklist.
 - Giảng viên có thể thu hồi tài liệu do chính mình nộp khi tài liệu còn chờ HR rà soát, sau đó tải bản thay thế. Thu hồi là thao tác lưu trạng thái và audit, không xóa tệp/lịch sử. Tài liệu đã được HR duyệt hoặc từ chối không thể sửa/xóa bởi giảng viên; cần nộp tài liệu bổ sung theo checklist hoặc trao đổi với HR.
 - Checklist có danh mục mẫu từ `ho_so_giang_vien.md`, gồm phân loại và điều kiện áp dụng. Khi tạo hồ sơ giảng viên, HR phải rà soát từng mục có điều kiện/bắt buộc để chọn bắt buộc, tùy chọn hoặc không áp dụng; chỉ tài liệu đã xác định là bắt buộc mới ảnh hưởng trạng thái đầy đủ. Mục tùy chọn không bắt buộc mặc định; giấy tờ định danh, bảo hiểm/thuế và ảnh được đánh dấu nhạy cảm. Danh mục và điều kiện có thể cấu hình, không áp dụng cho nhân viên không giảng dạy.
@@ -99,11 +102,20 @@ Lệnh khôi phục kiểm tra tính toàn vẹn CSDL, yêu cầu gõ `RESTORE`,
 
 ## Kiểm thử
 
+Kiểm thử trình duyệt cần Chromium và các phụ thuộc kiểm thử bổ sung:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+Sau đó chạy toàn bộ kiểm thử:
+
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -v
 ```
 
-Kiểm thử bao phủ xác thực, phân quyền, migration dữ liệu cũ, luồng phê duyệt, lịch sử công tác, tải tài liệu, checklist, báo cáo Excel và audit.
+Kiểm thử bao phủ xác thực, phân quyền, migration dữ liệu cũ, luồng phê duyệt, lịch sử công tác, tải tài liệu, checklist, báo cáo Excel, audit và các thao tác giao diện trên Chromium. Bộ kiểm thử trình duyệt chạy bằng máy chủ/cơ sở dữ liệu tạm riêng, không dùng dữ liệu demo của ứng dụng.
 
 ## Đưa lên mạng hoặc dùng hồ sơ thật
 

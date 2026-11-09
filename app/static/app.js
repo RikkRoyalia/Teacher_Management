@@ -13,6 +13,12 @@ const state = {
   notifTimer: null,
   detailTab: "info",
   teacherQuery: "",
+  teacherList: {
+    page: 1,
+    pageSize: 25,
+    filters: { q: "", department_id: "", academic_degree: "", employment_status: "" },
+  },
+  teacherRequestId: 0,
 };
 
 const viewTitles = {
@@ -212,7 +218,7 @@ function showApp(user) {
   navigate(user.role === "lecturer" ? "lecturer" : "overview");
 }
 
-async function api(path, options = {}) {
+async function apiWithMeta(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const headers = new Headers(options.headers || {});
   if (options.body instanceof FormData) {
@@ -242,10 +248,36 @@ async function api(path, options = {}) {
     }
     throw new Error(message);
   }
-  if (response.status === 204) return null;
+  if (response.status === 204) return { data: null, headers: response.headers };
   if (response.headers.get("content-type")?.includes("application/json"))
-    return response.json();
-  return response;
+    return { data: await response.json(), headers: response.headers };
+  return { data: response, headers: response.headers };
+}
+
+async function api(path, options = {}) {
+  const { data } = await apiWithMeta(path, options);
+  return data;
+}
+
+async function fetchAllTeachers() {
+  const teachers = [];
+  const limit = 200;
+  let offset = 0;
+  let total = 0;
+  do {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    const result = await apiWithMeta(`/teachers?${params}`);
+    const page = result.data;
+    const reportedTotal = Number(result.headers.get("X-Total-Count"));
+    if (!Array.isArray(page) || !Number.isInteger(reportedTotal) || reportedTotal < 0)
+      throw new Error("Phản hồi phân trang hồ sơ giảng viên không hợp lệ.");
+    teachers.push(...page);
+    total = reportedTotal;
+    offset += page.length;
+    if (page.length === 0 && offset < total)
+      throw new Error("Không thể tải đủ hồ sơ giảng viên theo phân trang.");
+  } while (offset < total);
+  return teachers;
 }
 
 async function refreshData() {
@@ -254,11 +286,16 @@ async function refreshData() {
     state.teachers = [];
     return;
   }
+  const needsTeachers =
+    state.user.role === "hr" &&
+    ["changes", "teacherDetail"].includes(state.currentView);
+  const teachersForCurrentView =
+    state.currentView === "teachers" ? state.teachers : [];
   const [departments, teachers] = await Promise.all([
-    api("/departments?include_inactive=true").catch(() => []),
-    state.user.role === "hr"
-      ? api("/teachers").catch(() => [])
-      : Promise.resolve([]),
+    api("/departments?include_inactive=true"),
+    needsTeachers
+      ? fetchAllTeachers()
+      : Promise.resolve(teachersForCurrentView),
   ]);
   state.departments = departments;
   state.teachers = teachers;
@@ -354,54 +391,65 @@ function headerButton(label, action, icon, primary = true) {
   return button;
 }
 
-function requestReason(action) {
-  const isReject = action === "reject";
+function requestForm({ title, fields, submitLabel }) {
   const backdrop = makeElement("div", "modal-backdrop");
   backdrop.setAttribute("role", "presentation");
   const dialog = makeElement("section", "modal modal-compact");
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-labelledby", "request-reason-title");
+  dialog.setAttribute("aria-labelledby", "request-form-title");
   const header = makeElement("div", "modal-header");
-  const title = makeElement(
-    "h2",
-    "",
-    isReject ? "Từ chối yêu cầu thay đổi" : "Yêu cầu bổ sung thông tin",
-  );
-  title.id = "request-reason-title";
-  header.append(title);
+  const heading = makeElement("h2", "", title);
+  heading.id = "request-form-title";
+  header.append(heading);
   const close = makeElement("button", "icon-button", "×");
   close.type = "button";
   close.setAttribute("aria-label", "Đóng");
   header.append(close);
 
   const form = document.createElement("form");
-  const label = makeElement("label", "form-field");
-  const labelText = makeElement("span", "", "Lý do");
-  const textarea = document.createElement("textarea");
-  textarea.required = true;
-  textarea.maxLength = 1000;
-  textarea.rows = 4;
-  label.append(labelText, textarea);
+  const controls = new Map();
+  fields.forEach((field) => {
+    const label = makeElement("label", "form-field");
+    label.append(makeElement("span", "", field.label));
+    let control;
+    if (field.type === "select") {
+      control = document.createElement("select");
+      control.append(new Option("Chọn giá trị", ""));
+      field.options.forEach(([value, optionLabel]) =>
+        control.add(new Option(optionLabel, String(value))),
+      );
+    } else if (field.type === "textarea") {
+      control = document.createElement("textarea");
+      control.rows = field.rows || 4;
+    } else {
+      control = document.createElement("input");
+      control.type = field.type || "text";
+    }
+    control.name = field.name;
+    control.required = Boolean(field.required);
+    if (field.maxLength) control.maxLength = field.maxLength;
+    if (field.value !== undefined && field.value !== null)
+      control.value = String(field.value);
+    label.append(control);
+    controls.set(field.name, control);
+    form.append(label);
+  });
   const actions = makeElement("div", "modal-actions");
   const cancel = makeElement("button", "button button-secondary", "Hủy");
   cancel.type = "button";
-  const submit = makeElement(
-    "button",
-    "button button-primary",
-    isReject ? "Xác nhận từ chối" : "Gửi yêu cầu bổ sung",
-  );
+  const submit = makeElement("button", "button button-primary", submitLabel);
   submit.type = "submit";
   actions.append(cancel, submit);
-  form.append(label, actions);
+  form.append(actions);
   dialog.append(header, form);
   backdrop.append(dialog);
   document.body.append(backdrop);
 
   return new Promise((resolve) => {
-    const finish = (reason) => {
+    const finish = (values) => {
       backdrop.remove();
-      resolve(reason);
+      resolve(values);
     };
     close.addEventListener("click", () => finish(null));
     cancel.addEventListener("click", () => finish(null));
@@ -413,13 +461,40 @@ function requestReason(action) {
     });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      const reason = textarea.value.trim();
-      textarea.setCustomValidity(reason ? "" : "Vui lòng nhập lý do.");
+      fields.forEach((field) => {
+        const control = controls.get(field.name);
+        control.setCustomValidity(
+          field.required && !control.value.trim()
+            ? "Vui lòng nhập nội dung."
+            : "",
+        );
+      });
       if (!form.reportValidity()) return;
-      finish(reason);
+      finish(
+        Object.fromEntries(
+          [...controls].map(([name, control]) => [name, control.value.trim()]),
+        ),
+      );
     });
-    textarea.focus();
+    controls.values().next().value?.focus();
   });
+}
+
+function requestReason(action) {
+  const isReject = action === "reject";
+  return requestForm({
+    title: isReject ? "Từ chối yêu cầu thay đổi" : "Yêu cầu bổ sung thông tin",
+    fields: [
+      {
+        name: "reason",
+        label: "Lý do",
+        type: "textarea",
+        required: true,
+        maxLength: 1000,
+      },
+    ],
+    submitLabel: isReject ? "Xác nhận từ chối" : "Gửi yêu cầu bổ sung",
+  }).then((values) => values?.reason ?? null);
 }
 
 function departmentName(id) {
@@ -809,18 +884,25 @@ function setTable(headers, rows, options = {}) {
   const headingRow = document.createElement("tr");
   headers.forEach((header) => headingRow.append(makeElement("th", "", header)));
   head.append(headingRow);
-  state.table = { rows, size: options.pageSize || 10, page: 1 };
+  state.table = {
+    rows,
+    size: options.pageSize || 10,
+    page: options.page || 1,
+    total: options.total ?? rows.length,
+    onPageChange: options.onPageChange,
+  };
   drawTablePage();
 }
 
 function drawTablePage() {
-  const { rows, size } = state.table;
-  const pages = Math.max(1, Math.ceil(rows.length / size));
+  const { rows, size, total, onPageChange } = state.table;
+  const pages = Math.max(1, Math.ceil(total / size));
   state.table.page = Math.min(Math.max(1, state.table.page), pages);
   const body = $("#workspace-rows");
   body.replaceChildren();
   const first = (state.table.page - 1) * size;
-  for (const values of rows.slice(first, first + size)) {
+  const visibleRows = onPageChange ? rows : rows.slice(first, first + size);
+  for (const values of visibleRows) {
     const row = document.createElement("tr");
     values.forEach((value) => {
       const cell = document.createElement("td");
@@ -832,7 +914,7 @@ function drawTablePage() {
     });
     body.append(row);
   }
-  $("#workspace-empty").classList.toggle("hidden", rows.length > 0);
+  $("#workspace-empty").classList.toggle("hidden", total > 0);
   const pager = $("#workspace-pager");
   pager.replaceChildren();
   pager.classList.toggle("hidden", pages <= 1);
@@ -846,7 +928,7 @@ function drawTablePage() {
       makeElement(
         "span",
         "",
-        `Trang ${state.table.page}/${pages} · ${rows.length} bản ghi`,
+        `Trang ${state.table.page}/${pages} · ${total} bản ghi`,
       ),
       next,
     );
@@ -899,20 +981,18 @@ async function renderTeachers() {
   const filter = makeElement("input", "workspace-search");
   filter.type = "search";
   filter.placeholder = "Tìm theo tên hoặc mã";
+  filter.value = state.teacherList.filters.q;
   const departmentFilter = document.createElement("select");
   departmentFilter.append(new Option("Tất cả đơn vị", ""));
   state.departments.forEach((unit) =>
     departmentFilter.add(new Option(unit.name, String(unit.id))),
   );
+  departmentFilter.value = state.teacherList.filters.department_id;
   const degreeFilter = document.createElement("select");
   degreeFilter.append(new Option("Tất cả trình độ", ""));
-  [
-    ...new Set(
-      state.teachers.map((teacher) => teacher.academic_degree).filter(Boolean),
-    ),
-  ]
-    .sort((left, right) => left.localeCompare(right, "vi"))
-    .forEach((degree) => degreeFilter.add(new Option(degree, degree)));
+  const degrees = await api("/teachers/degrees");
+  degrees.forEach((degree) => degreeFilter.add(new Option(degree, degree)));
+  degreeFilter.value = state.teacherList.filters.academic_degree;
   const statusFilter = document.createElement("select");
   statusFilter.append(new Option("Tất cả trạng thái", ""));
   [
@@ -920,36 +1000,52 @@ async function renderTeachers() {
     ["paused", "Tạm ngừng"],
     ["ended", "Đã kết thúc"],
   ].forEach(([value, label]) => statusFilter.add(new Option(label, value)));
+  statusFilter.value = state.teacherList.filters.employment_status;
   $("#workspace-filters").append(
     filter,
     departmentFilter,
     degreeFilter,
     statusFilter,
   );
-  const drawRows = () => {
-    const query = filter.value.trim().toLocaleLowerCase("vi");
-    const filtered = state.teachers.filter(
-      (teacher) =>
-        `${teacher.employee_code} ${teacher.full_name}`
-          .toLocaleLowerCase("vi")
-          .includes(query) &&
-        (!departmentFilter.value ||
-          teacher.department_id === Number(departmentFilter.value)) &&
-        (!degreeFilter.value ||
-          teacher.academic_degree === degreeFilter.value) &&
-        (!statusFilter.value ||
-          teacher.employment_status === statusFilter.value),
-    );
+  const drawRows = async (page = 1) => {
+    const requestId = ++state.teacherRequestId;
+    state.teacherList = {
+      page,
+      pageSize: state.teacherList.pageSize,
+      filters: {
+        q: filter.value.trim(),
+        department_id: departmentFilter.value,
+        academic_degree: degreeFilter.value,
+        employment_status: statusFilter.value,
+      },
+    };
     const params = new URLSearchParams();
-    if (filter.value.trim()) params.set("q", filter.value.trim());
+    if (state.teacherList.filters.q) params.set("q", state.teacherList.filters.q);
     if (departmentFilter.value)
       params.set("department_id", departmentFilter.value);
     if (degreeFilter.value) params.set("academic_degree", degreeFilter.value);
     if (statusFilter.value) params.set("employment_status", statusFilter.value);
+    params.set("limit", String(state.teacherList.pageSize));
+    params.set(
+      "offset",
+      String((state.teacherList.page - 1) * state.teacherList.pageSize),
+    );
     state.teacherQuery = params.toString();
+    const result = await apiWithMeta(`/teachers?${params}`);
+    if (requestId !== state.teacherRequestId) return;
+    const teachers = result.data;
+    const total = Number(result.headers.get("X-Total-Count"));
+    if (!Array.isArray(teachers) || !Number.isInteger(total) || total < 0)
+      throw new Error("Phản hồi danh sách giảng viên không hợp lệ.");
+    const lastPage = Math.max(
+      1,
+      Math.ceil(total / state.teacherList.pageSize),
+    );
+    if (state.teacherList.page > lastPage) return drawRows(lastPage);
+    state.teachers = teachers;
     setTable(
       ["Mã", "Họ tên", "Đơn vị", "Trình độ", "Trạng thái", "Thao tác"],
-      filtered.map((teacher) => [
+      teachers.map((teacher) => [
         teacher.employee_code,
         teacher.full_name,
         departmentName(teacher.department_id),
@@ -961,15 +1057,28 @@ async function renderTeachers() {
           actionButton("Xóa", "delete-teacher", teacher.id, "danger"),
         ]),
       ]),
+      {
+        pageSize: state.teacherList.pageSize,
+        page: state.teacherList.page,
+        total,
+        onPageChange: drawRows,
+      },
     );
   };
-  [filter, departmentFilter, degreeFilter, statusFilter].forEach((control) =>
-    control.addEventListener("input", drawRows),
-  );
+  let searchTimer;
+  filter.addEventListener("input", () => {
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(
+      () => drawRows(1).catch((error) => showToast(error.message, true)),
+      250,
+    );
+  });
   [departmentFilter, degreeFilter, statusFilter].forEach((control) =>
-    control.addEventListener("change", drawRows),
+    control.addEventListener("change", () =>
+      drawRows(1).catch((error) => showToast(error.message, true)),
+    ),
   );
-  drawRows();
+  await drawRows(state.teacherList.page);
 }
 
 async function renderLecturerPortal() {
@@ -1317,10 +1426,14 @@ async function renderReports() {
   );
   const start = inputField({
     name: "start_date",
-    label: "Từ ngày",
+    label: "Ngày tạo hồ sơ từ",
     type: "date",
   });
-  const end = inputField({ name: "end_date", label: "Đến ngày", type: "date" });
+  const end = inputField({
+    name: "end_date",
+    label: "Ngày tạo hồ sơ đến",
+    type: "date",
+  });
   const form = document.createElement("form");
   form.className = "inline-form";
   form.append(
@@ -1329,6 +1442,12 @@ async function renderReports() {
     start,
     end,
   );
+  const dateBasis = makeElement(
+    "p",
+    "page-subtitle",
+    "Khoảng ngày lọc theo ngày tạo hồ sơ. Các chỉ số hợp đồng là hợp đồng đang sắp hoặc đã hết hạn tính đến hôm nay trong nhóm hồ sơ đã lọc.",
+  );
+  dateBasis.setAttribute("role", "note");
   const run = makeElement("button", "button button-primary", "Tạo báo cáo");
   run.type = "submit";
   const exportButton = makeElement(
@@ -1433,7 +1552,7 @@ async function renderReports() {
       showToast(error.message, true);
     }
   });
-  $("#workspace-filters").append(form);
+  $("#workspace-filters").append(dateBasis, form);
   $("#workspace-form-region").append(results);
   form.requestSubmit();
 }
@@ -2146,9 +2265,9 @@ function bindEvents() {
               : "rejected";
           const reason =
             review_status === "rejected"
-              ? window.prompt("Nhập lý do từ chối (bắt buộc):")
+              ? await requestReason("reject")
               : null;
-          if (review_status === "rejected" && !reason?.trim()) break;
+          if (review_status === "rejected" && reason === null) break;
           await api(`/documents/${id}/review`, {
             method: "PATCH",
             body: JSON.stringify({ review_status, reason }),
@@ -2194,19 +2313,83 @@ function bindEvents() {
           const currentRequests = await api("/change-requests");
           const change = currentRequests.find((item) => item.id === id);
           if (!change) break;
-          const proposalText = window.prompt(
-            "Cập nhật nội dung đề xuất (JSON):",
-            JSON.stringify(change.proposed_value),
+          const entries = Object.entries(change.proposed_value || {});
+          if (!entries.length)
+            throw new Error("Yêu cầu không có nội dung đề xuất để cập nhật.");
+          const fields = entries.map(([key, value]) => {
+            let options = null;
+            if (key === "department_id") {
+              options = state.departments.map((department) => [
+                department.id,
+                `${department.name}${department.is_active ? "" : " (đã ngừng)"}`,
+              ]);
+            } else if (key === "employment_status") {
+              options = [
+                ["active", "Đang công tác"],
+                ["paused", "Tạm ngừng"],
+                ["ended", "Đã kết thúc"],
+              ];
+            } else if (key === "academic_degree" || key === "academic_title") {
+              const defaults =
+                key === "academic_degree" ? academicDegrees : academicTitles;
+              options = [
+                ...new Set([
+                  ...defaults,
+                  ...state.teachers.map((teacher) => teacher[key]).filter(Boolean),
+                  String(value),
+                ]),
+              ].map((option) => [option, option]);
+            }
+            if (options && !options.some(([option]) => String(option) === String(value)))
+              options.push([value, String(value)]);
+            return {
+              name: `proposed:${key}`,
+              label: `Nội dung đề xuất — ${changeTypeLabels[key] || key}`,
+              type: options ? "select" : "textarea",
+              options: options || [],
+              value:
+                options || typeof value === "string"
+                  ? value
+                  : JSON.stringify(value),
+              required: true,
+              maxLength: 1000,
+            };
+          });
+          fields.push({
+            name: "reason",
+            label: "Nội dung bổ sung / lý do",
+            type: "textarea",
+            required: true,
+            maxLength: 1000,
+          });
+          const values = await requestForm({
+            title: "Bổ sung yêu cầu thay đổi",
+            fields,
+            submitLabel: "Gửi bổ sung",
+          });
+          if (!values) break;
+          const proposedValue = Object.fromEntries(
+            entries.map(([key]) => {
+              const value = values[`proposed:${key}`];
+              if (key === "department_id") return [key, Number(value)];
+              if (
+                key === "academic_degree" ||
+                key === "academic_title" ||
+                key === "employment_status"
+              )
+                return [key, value];
+              try {
+                return [key, JSON.parse(value)];
+              } catch {
+                return [key, value];
+              }
+            }),
           );
-          if (!proposalText) break;
-          const reason = window.prompt("Ghi nội dung bổ sung/lý do:");
-          if (!reason?.trim()) break;
-          const proposedValue = JSON.parse(proposalText);
           await api(`/change-requests/${id}`, {
             method: "PATCH",
             body: JSON.stringify({
               proposed_value: proposedValue,
-              reason,
+              reason: values.reason,
               effective_on: change.effective_on,
             }),
           });
@@ -2219,24 +2402,37 @@ function bindEvents() {
           const items = await api("/checklist-items");
           const item = items.find((entry) => entry.id === id);
           if (!item) throw new Error("Không tìm thấy mục checklist cần sửa.");
-          const classification = window.prompt(
-            "Phân loại: required, conditional hoặc optional",
-            item?.classification || "conditional",
-          );
-          if (
-            !classification ||
-            !["required", "conditional", "optional"].includes(classification)
-          )
-            break;
-          const applicability = window.prompt(
-            "Điều kiện áp dụng",
-            item?.applicability || "",
-          );
-          if (applicability === null) break;
+          const values = await requestForm({
+            title: "Sửa mục checklist",
+            fields: [
+              {
+                name: "classification",
+                label: "Phân loại",
+                type: "select",
+                required: true,
+                value: item.classification || "conditional",
+                options: [
+                  ["required", "Bắt buộc"],
+                  ["conditional", "Có điều kiện"],
+                  ["optional", "Tùy chọn"],
+                ],
+              },
+              {
+                name: "applicability",
+                label: "Điều kiện áp dụng",
+                type: "textarea",
+                value: item.applicability || "",
+                maxLength: 500,
+              },
+            ],
+            submitLabel: "Lưu thay đổi",
+          });
+          if (!values) break;
           await api(`/checklist-items/${id}`, {
             method: "PATCH",
-            body: JSON.stringify({ classification, applicability }),
+            body: JSON.stringify(values),
           });
+          showToast("Đã cập nhật checklist.");
           await renderWorkspace();
           break;
         }
@@ -3173,12 +3369,20 @@ function bindNewEvents() {
           break;
         }
         case "page-prev":
-          state.table.page -= 1;
-          drawTablePage();
+          if (state.table.onPageChange)
+            await state.table.onPageChange(state.table.page - 1);
+          else {
+            state.table.page -= 1;
+            drawTablePage();
+          }
           break;
         case "page-next":
-          state.table.page += 1;
-          drawTablePage();
+          if (state.table.onPageChange)
+            await state.table.onPageChange(state.table.page + 1);
+          else {
+            state.table.page += 1;
+            drawTablePage();
+          }
           break;
         case "teacher-open":
           state.selectedTeacherId = String(id);

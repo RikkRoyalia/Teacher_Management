@@ -15,6 +15,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -22,10 +23,11 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 from starlette.concurrency import run_in_threadpool
 
 from app.audit import record_audit
@@ -134,7 +136,111 @@ ADMIN_USER = Annotated[User, Depends(require_roles("admin"))]
 HR_OR_MANAGER = Annotated[User, Depends(require_roles("hr", "manager"))]
 
 
-def create_app(database_url: str = DATABASE_URL) -> FastAPI:
+def _report_teacher_filters(
+    department_id: int | None,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[ColumnElement[bool]]:
+    filters: list[ColumnElement[bool]] = []
+    if department_id is not None:
+        filters.append(Teacher.department_id == department_id)
+    if start_date is not None:
+        filters.append(func.date(Teacher.created_at) >= start_date.isoformat())
+    if end_date is not None:
+        filters.append(func.date(Teacher.created_at) <= end_date.isoformat())
+    return filters
+
+
+def _teacher_filters(
+    q: str | None,
+    department_id: int | None,
+    academic_degree: str | None,
+    employment_status: str | None,
+) -> list[ColumnElement[bool]]:
+    filters: list[ColumnElement[bool]] = []
+    if q:
+        search_term = f"%{q}%"
+        filters.append(
+            or_(
+                Teacher.employee_code.ilike(search_term),
+                Teacher.full_name.ilike(search_term),
+            )
+        )
+    if department_id is not None:
+        filters.append(Teacher.department_id == department_id)
+    if academic_degree:
+        filters.append(Teacher.academic_degree == academic_degree)
+    if employment_status:
+        filters.append(Teacher.employment_status == employment_status)
+    return filters
+
+
+def _incomplete_teacher_expression() -> ColumnElement[bool]:
+    approved_document = (
+        select(EvidenceDocument.id)
+        .where(
+            EvidenceDocument.teacher_id == Teacher.id,
+            EvidenceDocument.checklist_item_id == ChecklistItem.id,
+            EvidenceDocument.review_status == "approved",
+        )
+        .exists()
+    )
+    unresolved_requirement = (
+        select(ChecklistItem.id)
+        .outerjoin(
+            TeacherChecklistRequirement,
+            and_(
+                TeacherChecklistRequirement.checklist_item_id == ChecklistItem.id,
+                TeacherChecklistRequirement.teacher_id == Teacher.id,
+            ),
+        )
+        .where(
+            ChecklistItem.is_active.is_(True),
+            or_(
+                TeacherChecklistRequirement.status == "review",
+                and_(
+                    TeacherChecklistRequirement.status.is_(None),
+                    ChecklistItem.classification != "optional",
+                ),
+                and_(
+                    TeacherChecklistRequirement.status == "required",
+                    ~approved_document,
+                ),
+            ),
+        )
+        .exists()
+    )
+    return or_(
+        Teacher.employee_code.is_(None),
+        Teacher.employee_code == "",
+        Teacher.full_name.is_(None),
+        Teacher.full_name == "",
+        Teacher.department_id.is_(None),
+        unresolved_requirement,
+    )
+
+
+def create_app(
+    database_url: str = DATABASE_URL,
+    secure_cookies: bool | None = None,
+) -> FastAPI:
+    if secure_cookies is None:
+        configured_secure_cookies = os.getenv("TEACHER_MANAGEMENT_COOKIE_SECURE")
+        if configured_secure_cookies is not None:
+            normalized_setting = configured_secure_cookies.strip().lower()
+            if normalized_setting not in {"true", "false"}:
+                raise ValueError(
+                    "TEACHER_MANAGEMENT_COOKIE_SECURE must be true or false."
+                )
+            secure_cookies = normalized_setting == "true"
+
+    def use_secure_cookies(request: Request) -> bool:
+        return (
+            secure_cookies
+            if secure_cookies is not None
+            else request.url.scheme == "https"
+        )
+
     engine, session_factory = create_database(database_url)
 
     @asynccontextmanager
@@ -281,7 +387,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             SESSION_COOKIE,
             token,
             httponly=True,
-            secure=False,
+            secure=use_secure_cookies(request),
             samesite="strict",
             max_age=8 * 60 * 60,
             path="/",
@@ -290,7 +396,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             CSRF_COOKIE,
             csrf_token,
             httponly=False,
-            secure=False,
+            secure=use_secure_cookies(request),
             samesite="strict",
             max_age=8 * 60 * 60,
             path="/",
@@ -320,7 +426,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             CSRF_COOKIE,
             csrf_token,
             httponly=False,
-            secure=False,
+            secure=use_secure_cookies(request),
             samesite="strict",
             max_age=8 * 60 * 60,
             path="/",
@@ -626,29 +732,40 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     def list_teachers(
         db: DbSession,
         _: HR_USER,
+        response: Response,
         q: Annotated[str | None, Query(min_length=1, max_length=160)] = None,
         department_id: int | None = Query(default=None, gt=0),
         academic_degree: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
         employment_status: str | None = Query(
             default=None, pattern="^(active|paused|ended)$"
         ),
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
     ) -> list[Teacher]:
-        statement = select(Teacher)
-        if q:
-            search_term = f"%{q}%"
-            statement = statement.where(
-                or_(
-                    Teacher.employee_code.ilike(search_term),
-                    Teacher.full_name.ilike(search_term),
-                )
+        filters = _teacher_filters(q, department_id, academic_degree, employment_status)
+        total = db.scalar(
+            select(func.count()).select_from(Teacher).where(*filters)
+        ) or 0
+        response.headers["X-Total-Count"] = str(total)
+        statement = (
+            select(Teacher)
+            .where(*filters)
+            .order_by(Teacher.full_name, Teacher.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(db.scalars(statement))
+
+    @application.get("/teachers/degrees", response_model=list[str], tags=["teachers"])
+    def list_teacher_degrees(db: DbSession, _: HR_USER) -> list[str]:
+        return list(
+            db.scalars(
+                select(Teacher.academic_degree)
+                .where(Teacher.academic_degree.is_not(None))
+                .distinct()
+                .order_by(Teacher.academic_degree)
             )
-        if department_id is not None:
-            statement = statement.where(Teacher.department_id == department_id)
-        if academic_degree:
-            statement = statement.where(Teacher.academic_degree == academic_degree)
-        if employment_status:
-            statement = statement.where(Teacher.employment_status == employment_status)
-        return list(db.scalars(statement.order_by(Teacher.full_name, Teacher.id)))
+        )
 
     @application.get("/teachers/export.xlsx", tags=["teachers"])
     def export_teachers(
@@ -659,13 +776,21 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         academic_degree: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
         employment_status: str | None = Query(default=None, pattern="^(active|paused|ended)$"),
     ) -> StreamingResponse:
-        teachers = list_teachers(db, actor, q, department_id, academic_degree, employment_status)
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.title = "Giang vien"
+        filters = _teacher_filters(q, department_id, academic_degree, employment_status)
+        total = db.scalar(
+            select(func.count()).select_from(Teacher).where(*filters)
+        ) or 0
+        workbook = Workbook(write_only=True)
+        sheet = workbook.create_sheet("Giang vien")
         sheet.append(["Mã giảng viên", "Họ tên", "Ngày sinh", "Giới tính", "Email", "Điện thoại",
                       "Địa chỉ", "Đơn vị", "Trình độ", "Chức danh", "Trạng thái", "Hồ sơ"])
-        for teacher in teachers:
+        statement = (
+            select(Teacher, _incomplete_teacher_expression())
+            .where(*filters)
+            .order_by(Teacher.full_name, Teacher.id)
+            .execution_options(yield_per=500)
+        )
+        for teacher, is_incomplete in db.execute(statement):
             sheet.append([_safe_cell(value) for value in (
                 teacher.employee_code,
                 teacher.full_name,
@@ -678,9 +803,9 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
                 teacher.academic_degree or "",
                 teacher.academic_title or "",
                 EMPLOYMENT_STATUS_LABELS.get(teacher.employment_status, teacher.employment_status),
-                "Đầy đủ" if not _missing_requirements(db, teacher) else "Còn thiếu",
+                "Còn thiếu" if is_incomplete else "Đầy đủ",
             )])
-        record_audit(db, actor, "teachers_exported", "teacher", None, details={"count": len(teachers)})
+        record_audit(db, actor, "teachers_exported", "teacher", None, details={"count": total})
         db.commit()
         return _xlsx_response(workbook, "danh_sach_giang_vien.xlsx")
 
@@ -1660,51 +1785,69 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
     ) -> dict[str, Any]:
         if start_date and end_date and end_date < start_date:
             raise HTTPException(status_code=422, detail="End date cannot be before start date.")
-        statement = select(Teacher)
-        if department_id is not None:
-            statement = statement.where(Teacher.department_id == department_id)
-        if start_date is not None:
-            statement = statement.where(func.date(Teacher.created_at) >= start_date.isoformat())
-        if end_date is not None:
-            statement = statement.where(func.date(Teacher.created_at) <= end_date.isoformat())
-        teachers = list(db.scalars(statement))
-        teacher_ids = [teacher.id for teacher in teachers]
-        complete_count = sum(not _missing_requirements(db, teacher) for teacher in teachers)
-        status_counts: dict[str, int] = {}
-        degree_counts: dict[str, int] = {}
-        title_counts: dict[str, int] = {}
-        for teacher in teachers:
-            if teacher.academic_title:
-                title_counts[teacher.academic_title] = title_counts.get(teacher.academic_title, 0) + 1
-            status_counts[teacher.employment_status] = status_counts.get(teacher.employment_status, 0) + 1
-            if teacher.academic_degree:
-                degree_counts[teacher.academic_degree] = degree_counts.get(teacher.academic_degree, 0) + 1
-        department_counts: dict[str, int] = {}
-        for teacher in teachers:
-            name = teacher.department.name if teacher.department else "Unknown"
-            department_counts[name] = department_counts.get(name, 0) + 1
+        filters = _report_teacher_filters(department_id, start_date, end_date)
+        filtered_teacher_ids = select(Teacher.id).where(*filters)
+        total_teachers = db.scalar(
+            select(func.count()).select_from(Teacher).where(*filters)
+        ) or 0
+
+        def grouped_counts(
+            column: Any,
+            extra_filters: tuple[Any, ...] = (),
+        ) -> dict[Any, int]:
+            return dict(
+                db.execute(
+                    select(column, func.count())
+                    .select_from(Teacher)
+                    .where(*filters, *extra_filters)
+                    .group_by(column)
+                ).all()
+            )
+
+        status_counts = grouped_counts(Teacher.employment_status)
+        degree_counts = grouped_counts(
+            Teacher.academic_degree,
+            (Teacher.academic_degree.is_not(None),),
+        )
+        title_counts = grouped_counts(
+            Teacher.academic_title,
+            (Teacher.academic_title.is_not(None),),
+        )
+        department_counts = dict(
+            db.execute(
+                select(func.coalesce(Department.name, "Unknown"), func.count())
+                .select_from(Teacher)
+                .outerjoin(Department, Department.id == Teacher.department_id)
+                .where(*filters)
+                .group_by(Department.name)
+            ).all()
+        )
+        incomplete_profiles = db.scalar(
+            select(func.count(Teacher.id)).where(
+                *filters,
+                _incomplete_teacher_expression(),
+            )
+        ) or 0
 
         today = date.today()
         warning_days = _contract_warning_days(db)
-        contract_statement = select(EmploymentContract).where(
-            EmploymentContract.status == "active",
-            EmploymentContract.ends_on.is_not(None),
-            EmploymentContract.ends_on <= today + timedelta(days=warning_days),
+        expiring_contracts = db.scalar(
+            select(func.count())
+            .select_from(EmploymentContract)
+            .where(
+                EmploymentContract.status == "active",
+                EmploymentContract.ends_on.is_not(None),
+                EmploymentContract.ends_on <= today + timedelta(days=warning_days),
+                EmploymentContract.teacher_id.in_(filtered_teacher_ids),
+            )
+        ) or 0
+        request_counts = dict(
+            db.execute(
+                select(ChangeRequest.status, func.count())
+                .where(ChangeRequest.teacher_id.in_(filtered_teacher_ids))
+                .group_by(ChangeRequest.status)
+            ).all()
         )
-        if department_id is not None:
-            contract_statement = contract_statement.join(Teacher).where(
-                Teacher.department_id == department_id
-            )
-        contracts = list(db.scalars(contract_statement))
-        if teacher_ids:
-            request_statement = select(ChangeRequest).where(
-                ChangeRequest.teacher_id.in_(teacher_ids)
-            )
-        else:
-            request_statement = select(ChangeRequest).where(ChangeRequest.id == -1)
-        request_counts: dict[str, int] = {}
-        for item in db.scalars(request_statement):
-            request_counts[item.status] = request_counts.get(item.status, 0) + 1
 
         return {
             "filters": {
@@ -1713,13 +1856,13 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
                 "end_date": end_date,
                 "date_basis": "teacher record creation date",
             },
-            "total_teachers": len(teachers),
+            "total_teachers": total_teachers,
             "teachers_by_status": status_counts,
             "teachers_by_degree": degree_counts,
             "teachers_by_title": title_counts,
             "teachers_by_department": department_counts,
-            "incomplete_profiles": len(teachers) - complete_count,
-            "expiring_or_expired_contracts": len(contracts),
+            "incomplete_profiles": incomplete_profiles,
+            "expiring_or_expired_contracts": expiring_contracts,
             "change_requests_by_status": request_counts,
             "contract_warning_days": warning_days,
         }
@@ -1733,22 +1876,21 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         end_date: date | None = None,
     ) -> StreamingResponse:
         summary = report_summary(db, actor, department_id, start_date, end_date)
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.title = "Giang vien"
+        workbook = Workbook(write_only=True)
+        sheet = workbook.create_sheet("Giang vien")
+        filters = _report_teacher_filters(department_id, start_date, end_date)
         sheet.append(["Báo cáo hồ sơ giảng viên"])
         sheet.append(["Điều kiện lọc", json.dumps(summary["filters"], ensure_ascii=False, default=str)])
         if actor.role == "hr":
             sheet.append(["Mã giảng viên", "Họ tên", "Đơn vị", "Trình độ", "Chức danh", "Trạng thái", "Đầy đủ hồ sơ"])
-        statement = select(Teacher)
-        if department_id is not None:
-            statement = statement.where(Teacher.department_id == department_id)
-        if start_date is not None:
-            statement = statement.where(func.date(Teacher.created_at) >= start_date.isoformat())
-        if end_date is not None:
-            statement = statement.where(func.date(Teacher.created_at) <= end_date.isoformat())
         if actor.role == "hr":
-            for teacher in db.scalars(statement.order_by(Teacher.full_name)):
+            statement = (
+                select(Teacher, _incomplete_teacher_expression())
+                .where(*filters)
+                .order_by(Teacher.full_name, Teacher.id)
+                .execution_options(yield_per=500)
+            )
+            for teacher, is_incomplete in db.execute(statement):
                 sheet.append(
                     [
                         teacher.employee_code,
@@ -1757,7 +1899,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
                         teacher.academic_degree or "",
                         teacher.academic_title or "",
                         teacher.employment_status,
-                        "Đầy đủ" if not _missing_requirements(db, teacher) else "Còn thiếu",
+                        "Còn thiếu" if is_incomplete else "Đầy đủ",
                     ]
                 )
         summary_sheet = workbook.create_sheet("Tong hop")

@@ -1,8 +1,9 @@
+import os
 import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -12,7 +13,15 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 
 from app.main import create_app
-from app.models import AuditLog, EvidenceDocument, User
+from app.models import (
+    AuditLog,
+    ChecklistItem,
+    EmploymentContract,
+    EvidenceDocument,
+    Teacher,
+    TeacherChecklistRequirement,
+    User,
+)
 from app.security import SESSION_COOKIE, hash_password
 from scripts.seed_demo import Api, ensure_lecturer_accounts
 
@@ -151,6 +160,124 @@ class TeacherManagementApiTests(unittest.TestCase):
 
         duplicate = self.create_teacher()
         self.assertEqual(duplicate.status_code, 409)
+
+    def test_teacher_list_pagination_and_degree_filter_options(self) -> None:
+        teacher_ids = [
+            self.create_teacher(f"T{index:03d}").json()["id"]
+            for index in range(1, 6)
+        ]
+        first_page = self.client.get("/teachers", params={"limit": 2, "offset": 0})
+        second_page = self.client.get("/teachers", params={"limit": 2, "offset": 2})
+        self.assertEqual(first_page.status_code, 200, first_page.text)
+        self.assertEqual(first_page.headers["x-total-count"], "5")
+        self.assertEqual(
+            [teacher["id"] for teacher in first_page.json()],
+            teacher_ids[:2],
+        )
+        self.assertEqual(
+            [teacher["id"] for teacher in second_page.json()],
+            teacher_ids[2:4],
+        )
+        self.assertEqual(
+            self.client.get("/teachers/degrees").json(),
+            ["Master"],
+        )
+        invalid_limit = self.client.get("/teachers", params={"limit": 201})
+        self.assertEqual(invalid_limit.status_code, 422)
+
+    def test_teacher_export_includes_records_beyond_the_first_page(self) -> None:
+        for index in range(1, 53):
+            self.create_teacher(f"EXP{index:03d}")
+        response = self.client.get("/teachers/export.xlsx")
+        self.assertEqual(response.status_code, 200, response.text)
+        workbook = load_workbook(BytesIO(response.content), read_only=True)
+        rows = list(workbook["Giang vien"].iter_rows(values_only=True))
+        workbook.close()
+        self.assertEqual(len(rows), 53)
+        self.assertIn("EXP052", [row[0] for row in rows[1:]])
+
+    def test_session_cookie_secure_flag_follows_https_and_override(self) -> None:
+        http_response = self.client.post(
+            "/auth/login",
+            json={
+                "username": "hr",
+                "password": "Correct horse battery staple 2048!",
+            },
+        )
+        self.assertEqual(http_response.status_code, 200, http_response.text)
+        self.assertNotIn("secure", http_response.headers["set-cookie"].lower())
+
+        with patch.dict(os.environ, {"TEACHER_MANAGEMENT_COOKIE_SECURE": "true"}):
+            secure_app = create_app("sqlite://")
+        with TestClient(secure_app, base_url="https://testserver") as secure_client:
+            secure_password_hash = hash_password("Correct horse battery staple 2048!")
+            with secure_app.state.session_factory() as db:
+                db.add(
+                    User(
+                        username="secure-user",
+                        full_name="Secure User",
+                        password_hash=secure_password_hash,
+                        role="hr",
+                    )
+                )
+                db.commit()
+            response = secure_client.post(
+                "/auth/login",
+                json={
+                    "username": "secure-user",
+                    "password": "Correct horse battery staple 2048!",
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("secure", response.headers["set-cookie"].lower())
+
+    def test_report_contracts_follow_filtered_teacher_cohort(self) -> None:
+        older_teacher = self.create_teacher("OLD001").json()
+        current_teacher = self.create_teacher("NEW001").json()
+        today = date.today()
+        with self.client.app.state.session_factory() as db:
+            old_record = db.get(Teacher, older_teacher["id"])
+            old_record.created_at = datetime.combine(
+                today - timedelta(days=30),
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            )
+            checklist_item = ChecklistItem(
+                code="report-cohort-check",
+                label="Report cohort requirement",
+                category="qualification",
+                classification="required",
+            )
+            db.add(checklist_item)
+            db.flush()
+            db.add(
+                TeacherChecklistRequirement(
+                    teacher_id=current_teacher["id"],
+                    checklist_item_id=checklist_item.id,
+                    status="required",
+                )
+            )
+            for index, teacher in enumerate((older_teacher, current_teacher), start=1):
+                db.add(
+                    EmploymentContract(
+                        teacher_id=teacher["id"],
+                        contract_code=f"REPORT-{index}",
+                        contract_type="Fixed term",
+                        starts_on=today,
+                        ends_on=today + timedelta(days=10),
+                        status="active",
+                    )
+                )
+            db.commit()
+
+        summary = self.client.get(
+            "/reports/summary",
+            params={"start_date": today.isoformat()},
+        )
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(summary.json()["total_teachers"], 1)
+        self.assertEqual(summary.json()["incomplete_profiles"], 1)
+        self.assertEqual(summary.json()["expiring_or_expired_contracts"], 1)
 
     def test_backend_role_enforcement_and_csrf(self) -> None:
         invalid_csrf = self.client.post(
@@ -980,11 +1107,14 @@ class TeacherManagementApiTests(unittest.TestCase):
 
     def test_reports_export_and_audit_access(self) -> None:
         self.create_teacher()
-        summary = self.client.get("/reports/summary")
-        self.assertEqual(summary.status_code, 200, summary.text)
-        self.assertEqual(summary.json()["total_teachers"], 1)
-
-        exported = self.client.get("/reports/export.xlsx")
+        with patch(
+            "app.main._missing_requirements",
+            side_effect=AssertionError("Report completeness must be set-based."),
+        ):
+            summary = self.client.get("/reports/summary")
+            self.assertEqual(summary.status_code, 200, summary.text)
+            self.assertEqual(summary.json()["total_teachers"], 1)
+            exported = self.client.get("/reports/export.xlsx")
         self.assertEqual(exported.status_code, 200)
         workbook = load_workbook(BytesIO(exported.content), read_only=True)
         self.assertIn("Giang vien", workbook.sheetnames)
