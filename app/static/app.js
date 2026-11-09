@@ -354,6 +354,74 @@ function headerButton(label, action, icon, primary = true) {
   return button;
 }
 
+function requestReason(action) {
+  const isReject = action === "reject";
+  const backdrop = makeElement("div", "modal-backdrop");
+  backdrop.setAttribute("role", "presentation");
+  const dialog = makeElement("section", "modal modal-compact");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "request-reason-title");
+  const header = makeElement("div", "modal-header");
+  const title = makeElement(
+    "h2",
+    "",
+    isReject ? "Từ chối yêu cầu thay đổi" : "Yêu cầu bổ sung thông tin",
+  );
+  title.id = "request-reason-title";
+  header.append(title);
+  const close = makeElement("button", "icon-button", "×");
+  close.type = "button";
+  close.setAttribute("aria-label", "Đóng");
+  header.append(close);
+
+  const form = document.createElement("form");
+  const label = makeElement("label", "form-field");
+  const labelText = makeElement("span", "", "Lý do");
+  const textarea = document.createElement("textarea");
+  textarea.required = true;
+  textarea.maxLength = 1000;
+  textarea.rows = 4;
+  label.append(labelText, textarea);
+  const actions = makeElement("div", "modal-actions");
+  const cancel = makeElement("button", "button button-secondary", "Hủy");
+  cancel.type = "button";
+  const submit = makeElement(
+    "button",
+    "button button-primary",
+    isReject ? "Xác nhận từ chối" : "Gửi yêu cầu bổ sung",
+  );
+  submit.type = "submit";
+  actions.append(cancel, submit);
+  form.append(label, actions);
+  dialog.append(header, form);
+  backdrop.append(dialog);
+  document.body.append(backdrop);
+
+  return new Promise((resolve) => {
+    const finish = (reason) => {
+      backdrop.remove();
+      resolve(reason);
+    };
+    close.addEventListener("click", () => finish(null));
+    cancel.addEventListener("click", () => finish(null));
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) finish(null);
+    });
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") finish(null);
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const reason = textarea.value.trim();
+      textarea.setCustomValidity(reason ? "" : "Vui lòng nhập lý do.");
+      if (!form.reportValidity()) return;
+      finish(reason);
+    });
+    textarea.focus();
+  });
+}
+
 function departmentName(id) {
   return state.departments.find((unit) => unit.id === id)?.name || "—";
 }
@@ -1089,9 +1157,6 @@ async function renderChanges() {
     ],
     requests.map((item) => {
       const actions = document.createElement("div");
-      const teacher = state.teachers.find(
-        (candidate) => candidate.id === item.teacher_id,
-      );
       if (state.user.role === "manager" && item.status === "pending") {
         actions.append(actionButton("Duyệt", "decide-change", item.id));
         actions.append(actionButton("Từ chối", "reject-change", item.id));
@@ -1104,8 +1169,8 @@ async function renderChanges() {
       }
       return [
         item.id,
-        teacher
-          ? `${teacher.employee_code} — ${teacher.full_name}`
+        item.teacher_employee_code && item.teacher_full_name
+          ? `${item.teacher_employee_code} — ${item.teacher_full_name}`
           : `Giảng viên #${item.teacher_id}`,
         item.change_type,
         formatChangeRequestValue(item.current_value),
@@ -2106,18 +2171,22 @@ function bindEvents() {
           break;
         case "reject-change":
         case "request-info": {
-          const reason = window.prompt("Nhập lý do (bắt buộc):");
-          if (!reason?.trim()) break;
+          const action =
+            button.dataset.action === "reject-change" ? "reject" : "request_info";
+          const reason = await requestReason(action);
+          if (reason === null) break;
           await api(`/change-requests/${id}/decision`, {
             method: "POST",
             body: JSON.stringify({
-              action:
-                button.dataset.action === "reject-change"
-                  ? "reject"
-                  : "request_info",
+              action,
               reason,
             }),
           });
+          showToast(
+            action === "reject"
+              ? "Đã từ chối yêu cầu thay đổi."
+              : "Đã yêu cầu bổ sung thông tin.",
+          );
           await renderWorkspace();
           break;
         }

@@ -662,6 +662,51 @@ class TeacherManagementApiTests(unittest.TestCase):
         )
         self.assertEqual(repeated.status_code, 409)
 
+    def test_manager_change_requests_include_teacher_names_and_require_reasons(self) -> None:
+        teacher = self.create_teacher(
+            employee_code="REQUEST-001",
+            full_name="Request Test Lecturer",
+            academic_title="Lecturer",
+        ).json()
+        request_ids = []
+        for proposed_title in ("Senior Lecturer", "Assistant Lecturer"):
+            response = self.client.post(
+                f"/teachers/{teacher['id']}/change-requests",
+                json={
+                    "change_type": "academic_title",
+                    "current_value": {},
+                    "proposed_value": {"academic_title": proposed_title},
+                    "reason": "Test manager decision workflow",
+                },
+                headers=self.headers(),
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            request_ids.append(response.json()["id"])
+
+        manager = self.login("manager")
+        manager_headers = {"X-CSRF-Token": manager["csrf_token"]}
+        requests = self.client.get("/change-requests", headers=manager_headers)
+        self.assertEqual(requests.status_code, 200, requests.text)
+        request = next(item for item in requests.json() if item["id"] == request_ids[0])
+        self.assertEqual(request["teacher_employee_code"], "REQUEST-001")
+        self.assertEqual(request["teacher_full_name"], "Request Test Lecturer")
+
+        for request_id, action, reason in (
+            (request_ids[0], "reject", "Proposal needs more evidence."),
+            (request_ids[1], "request_info", "Please clarify the effective date."),
+        ):
+            decision = self.client.post(
+                f"/change-requests/{request_id}/decision",
+                json={"action": action, "reason": reason},
+                headers=manager_headers,
+            )
+            self.assertEqual(decision.status_code, 200, decision.text)
+            self.assertEqual(decision.json()["resolution_reason"], reason)
+            self.assertEqual(
+                decision.json()["status"],
+                "rejected" if action == "reject" else "needs_info",
+            )
+
     def test_contract_alerts_checklist_and_protected_upload(self) -> None:
         teacher_id = self.create_teacher().json()["id"]
         checklist = self.client.post(

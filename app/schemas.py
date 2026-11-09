@@ -393,6 +393,8 @@ class ChangeDecision(InputModel):
 class ChangeRequestRead(BaseModel):
     id: int
     teacher_id: int
+    teacher_employee_code: str
+    teacher_full_name: str
     requester_id: int
     change_type: str
     current_value: dict[str, object]

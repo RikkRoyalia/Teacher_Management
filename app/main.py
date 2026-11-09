@@ -1810,7 +1810,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         record_audit(db, actor, "change_request_created", "change_request", request_item.id)
         db.commit()
         db.refresh(request_item)
-        return _change_request_response(request_item)
+        return _change_request_response(request_item, teacher)
 
     @application.get(
         "/change-requests",
@@ -1833,9 +1833,18 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             statement = statement.where(ChangeRequest.status == "pending")
         if state_filter:
             statement = statement.where(ChangeRequest.status == state_filter)
+        items = list(db.scalars(statement.order_by(ChangeRequest.created_at.desc())))
+        teachers = {
+            teacher.id: teacher
+            for teacher in db.scalars(
+                select(Teacher).where(
+                    Teacher.id.in_({item.teacher_id for item in items})
+                )
+            )
+        } if items else {}
         return [
-            _change_request_response(item)
-            for item in db.scalars(statement.order_by(ChangeRequest.created_at.desc()))
+            _change_request_response(item, teachers[item.teacher_id])
+            for item in items
         ]
 
     @application.patch(
@@ -1880,7 +1889,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         record_audit(db, actor, "change_request_resubmitted", "change_request", item.id)
         db.commit()
         db.refresh(item)
-        return _change_request_response(item)
+        return _change_request_response(item, teacher)
 
     @application.post(
         "/change-requests/{request_id}/decision",
@@ -1900,6 +1909,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             raise HTTPException(status_code=409, detail="Only pending requests can be processed.")
         if item.requester_id == actor.id:
             raise HTTPException(status_code=403, detail="You cannot approve or process your own request.")
+        teacher = _require_teacher(db, item.teacher_id)
         claimed = db.execute(
             update(ChangeRequest)
             .where(ChangeRequest.id == request_id, ChangeRequest.status == "pending")
@@ -1937,7 +1947,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
         )
         db.commit()
         db.refresh(item)
-        return _change_request_response(item)
+        return _change_request_response(item, teacher)
 
     @application.get(
         "/change-requests/{request_id}/events",
@@ -2297,10 +2307,12 @@ def _validate_work_period(
             )
 
 
-def _change_request_response(item: ChangeRequest) -> dict[str, Any]:
+def _change_request_response(item: ChangeRequest, teacher: Teacher) -> dict[str, Any]:
     return {
         "id": item.id,
         "teacher_id": item.teacher_id,
+        "teacher_employee_code": teacher.employee_code,
+        "teacher_full_name": teacher.full_name,
         "requester_id": item.requester_id,
         "change_type": item.change_type,
         "current_value": json.loads(item.current_value),
