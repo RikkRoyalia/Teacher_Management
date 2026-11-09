@@ -42,16 +42,14 @@ class UserCreate(InputModel):
     password: str = Field(min_length=12, max_length=256)
     role: Literal["admin", "hr", "manager", "lecturer"]
     teacher_id: int | None = Field(default=None, gt=0)
-    managed_department_ids: list[int] = Field(default_factory=list)
+    managed_department_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_teacher_link(self) -> "UserCreate":
         if (self.role == "lecturer") != (self.teacher_id is not None):
             raise ValueError("Lecturer accounts must be linked to one teacher profile.")
-        if self.role != "manager" and self.managed_department_ids:
-            raise ValueError("Only manager accounts can be assigned departments.")
-        if len(self.managed_department_ids) != len(set(self.managed_department_ids)):
-            raise ValueError("Manager department assignments must be unique.")
+        if (self.role == "manager") != (self.managed_department_id is not None):
+            raise ValueError("Manager accounts must be assigned exactly one faculty.")
         return self
 
 
@@ -60,7 +58,7 @@ class UserUpdate(InputModel):
     role: Literal["admin", "hr", "manager", "lecturer"] | None = None
     is_active: bool | None = None
     teacher_id: int | None = Field(default=None, gt=0)
-    managed_department_ids: list[int] | None = None
+    managed_department_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def require_changes(self) -> "UserUpdate":
@@ -70,16 +68,17 @@ class UserUpdate(InputModel):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null.")
         if (
-            self.managed_department_ids is not None
-            and len(self.managed_department_ids) != len(set(self.managed_department_ids))
-        ):
-            raise ValueError("Manager department assignments must be unique.")
-        if (
             self.role is not None
             and self.role != "manager"
-            and self.managed_department_ids
+            and self.managed_department_id is not None
         ):
-            raise ValueError("Only manager accounts can be assigned departments.")
+            raise ValueError("Only manager accounts can be assigned a faculty.")
+        if (
+            self.role == "manager"
+            and "managed_department_id" in self.model_fields_set
+            and self.managed_department_id is None
+        ):
+            raise ValueError("Manager accounts must be assigned exactly one faculty.")
         return self
 
 
@@ -91,7 +90,7 @@ class UserRead(BaseModel):
     full_name: str
     role: str
     teacher_id: int | None
-    managed_department_ids: list[int] = Field(default_factory=list)
+    managed_department_id: int | None = None
     is_active: bool
     created_at: datetime
 

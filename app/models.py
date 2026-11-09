@@ -6,6 +6,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -50,8 +51,10 @@ class User(Base):
     )
 
     @property
-    def managed_department_ids(self) -> list[int]:
-        return [department.id for department in self.managed_departments]
+    def managed_department_id(self) -> int | None:
+        if len(self.managed_departments) != 1:
+            return None
+        return self.managed_departments[0].id
 
 
 class LoginSession(Base):
@@ -383,6 +386,11 @@ class Notification(Base):
     __tablename__ = "notifications"
     __table_args__ = (
         UniqueConstraint("user_id", "event_key", name="uq_notification_user_event"),
+        Index(
+            "ix_notifications_user_manager_faculty",
+            "user_id",
+            "manager_faculty_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -395,6 +403,9 @@ class Notification(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     target_view: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[str | None] = mapped_column(String(80))
+    manager_faculty_id: Mapped[int | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL")
+    )
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

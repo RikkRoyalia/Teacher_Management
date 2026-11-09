@@ -12,6 +12,94 @@ from app.models import Teacher
 
 
 class LegacyDatabaseMigrationTests(unittest.TestCase):
+    def test_manager_notification_scope_migration_preserves_existing_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            database_path = root / "notifications.sqlite3"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.executescript(
+                    """
+                    PRAGMA foreign_keys=ON;
+                    CREATE TABLE departments (id INTEGER PRIMARY KEY);
+                    CREATE TABLE users (id INTEGER PRIMARY KEY);
+                    CREATE TABLE notifications (
+                        id INTEGER PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        event_key VARCHAR(160) NOT NULL,
+                        level VARCHAR(20) NOT NULL,
+                        title VARCHAR(160) NOT NULL,
+                        message TEXT NOT NULL,
+                        target_view VARCHAR(40) NOT NULL,
+                        target_id VARCHAR(80),
+                        is_read BOOLEAN NOT NULL DEFAULT 0,
+                        created_at DATETIME NOT NULL,
+                        CONSTRAINT uq_notification_user_event UNIQUE (user_id, event_key)
+                    );
+                    CREATE INDEX ix_notifications_user_id ON notifications(user_id);
+                    CREATE INDEX ix_notifications_user_created_at
+                        ON notifications(user_id, created_at);
+                    INSERT INTO departments (id) VALUES (1);
+                    INSERT INTO users (id) VALUES (1);
+                    INSERT INTO notifications (
+                        id, user_id, event_key, level, title, message,
+                        target_view, is_read, created_at
+                    ) VALUES (
+                        1, 1, 'existing-event', 'info', 'Existing', 'Preserve me',
+                        'reports', 0, CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE alembic_version (
+                        version_num VARCHAR(32) NOT NULL PRIMARY KEY
+                    );
+                    INSERT INTO alembic_version (version_num) VALUES ('20261109_0006');
+                    """
+                )
+
+            database_url = f"sqlite:///{database_path.as_posix()}"
+            engine, _ = create_database(database_url)
+            try:
+                with patch.dict(
+                    "os.environ",
+                    {"TEACHER_MANAGEMENT_BACKUP_DIR": str(root / "backups")},
+                ):
+                    migrate_database(database_url, engine)
+
+                with engine.connect() as connection:
+                    columns = {
+                        row[1]
+                        for row in connection.exec_driver_sql(
+                            "PRAGMA table_info(notifications)"
+                        )
+                    }
+                    self.assertIn("manager_faculty_id", columns)
+                    self.assertEqual(
+                        connection.exec_driver_sql(
+                            "SELECT message FROM notifications WHERE id=1"
+                        ).scalar_one(),
+                        "Preserve me",
+                    )
+                    foreign_keys = connection.exec_driver_sql(
+                        "PRAGMA foreign_key_list(notifications)"
+                    ).all()
+                    self.assertTrue(
+                        any(
+                            row[2] == "departments"
+                            and row[3] == "manager_faculty_id"
+                            and row[6] == "SET NULL"
+                            for row in foreign_keys
+                        )
+                    )
+                    indexes = {
+                        row[1]
+                        for row in connection.exec_driver_sql(
+                            "PRAGMA index_list(notifications)"
+                        )
+                    }
+                    self.assertIn(
+                        "ix_notifications_user_manager_faculty", indexes
+                    )
+            finally:
+                engine.dispose()
+
     def test_existing_teacher_rows_survive_upgrade_and_are_backed_up(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

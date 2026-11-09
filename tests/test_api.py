@@ -19,6 +19,7 @@ from app.models import (
     Department,
     EmploymentContract,
     EvidenceDocument,
+    Notification,
     Teacher,
     TeacherChecklistRequirement,
     User,
@@ -336,7 +337,11 @@ class TeacherManagementApiTests(unittest.TestCase):
         account_id = response.json()["id"]
         updated_account = self.client.patch(
             f"/users/{account_id}",
-            json={"full_name": "Updated User", "role": "manager"},
+            json={
+                "full_name": "Updated User",
+                "role": "manager",
+                "managed_department_id": self.department_id,
+            },
             headers={"X-CSRF-Token": admin["csrf_token"]},
         )
         self.assertEqual(updated_account.status_code, 200, updated_account.text)
@@ -656,12 +661,12 @@ class TeacherManagementApiTests(unittest.TestCase):
             manager_user = next(user for user in users if user["role"] == "manager")
             assigned = admin_client.patch(
                 f"/users/{manager_user['id']}",
-                json={"managed_department_ids": [self.department_id]},
+                json={"managed_department_id": self.department_id},
                 headers=admin_headers,
             )
             self.assertEqual(assigned.status_code, 200, assigned.text)
             self.assertEqual(
-                assigned.json()["managed_department_ids"], [self.department_id]
+                assigned.json()["managed_department_id"], self.department_id
             )
             account = admin_client.post(
                 "/users",
@@ -1164,7 +1169,10 @@ class TeacherManagementApiTests(unittest.TestCase):
         _, previous_hr_session = sign_in("hr")
         role_change = self.client.patch(
             f"/users/{hr_id}",
-            json={"role": "manager"},
+            json={
+                "role": "manager",
+                "managed_department_id": self.department_id,
+            },
             headers=admin_headers,
         )
         self.assertEqual(role_change.status_code, 200, role_change.text)
@@ -1216,7 +1224,6 @@ class TeacherManagementApiTests(unittest.TestCase):
             json={"code": "LAW", "name": "Law"},
             headers=self.headers(),
         ).json()
-
         direct_change = self.client.patch(
             f"/teachers/{teacher_id}",
             json={"department_id": new_department["id"]},
@@ -1321,6 +1328,271 @@ class TeacherManagementApiTests(unittest.TestCase):
                 decision.json()["status"],
                 "rejected" if action == "reject" else "needs_info",
             )
+
+    def test_manager_scope_is_one_root_faculty_including_subdepartments(self) -> None:
+        child = self.client.post(
+            "/departments",
+            json={
+                "code": "IT-CHILD",
+                "name": "Information Technology Department",
+                "parent_id": self.department_id,
+            },
+            headers=self.headers(),
+        ).json()
+        grandchild = self.client.post(
+            "/departments",
+            json={
+                "code": "IT-SUBCHILD",
+                "name": "Information Systems Unit",
+                "parent_id": child["id"],
+            },
+            headers=self.headers(),
+        ).json()
+        other_faculty = self.client.post(
+            "/departments",
+            json={"code": "LAW", "name": "Law Faculty"},
+            headers=self.headers(),
+        ).json()
+        other_child = self.client.post(
+            "/departments",
+            json={
+                "code": "LAW-CHILD",
+                "name": "Law Department",
+                "parent_id": other_faculty["id"],
+            },
+            headers=self.headers(),
+        ).json()
+        in_scope_teacher = self.create_teacher(
+            "SCOPE-IT",
+            full_name="Scoped Faculty Teacher",
+            department_id=grandchild["id"],
+        ).json()
+        outside_teacher = self.create_teacher(
+            "SCOPE-LAW",
+            full_name="Outside Faculty Teacher",
+            department_id=other_child["id"],
+        ).json()
+
+        admin = self.login("admin")
+        admin_headers = {"X-CSRF-Token": admin["csrf_token"]}
+        missing_faculty = self.client.post(
+            "/users",
+            json={
+                "username": "manager-no-faculty",
+                "full_name": "Manager Without Faculty",
+                "password": "Another safe password 456!",
+                "role": "manager",
+            },
+            headers=admin_headers,
+        )
+        self.assertEqual(missing_faculty.status_code, 422)
+        child_assignment = self.client.post(
+            "/users",
+            json={
+                "username": "manager-child-faculty",
+                "full_name": "Manager Child Assignment",
+                "password": "Another safe password 456!",
+                "role": "manager",
+                "managed_department_id": child["id"],
+            },
+            headers=admin_headers,
+        )
+        self.assertEqual(child_assignment.status_code, 422)
+        same_faculty_manager = self.client.post(
+            "/users",
+            json={
+                "username": "manager-deputy",
+                "full_name": "Manager Deputy",
+                "password": "Another safe password 456!",
+                "role": "manager",
+                "managed_department_id": self.department_id,
+            },
+            headers=admin_headers,
+        )
+        self.assertEqual(same_faculty_manager.status_code, 201)
+        self.assertEqual(
+            same_faculty_manager.json()["managed_department_id"],
+            self.department_id,
+        )
+        updated_manager = self.client.patch(
+            f"/users/{same_faculty_manager.json()['id']}",
+            json={"managed_department_id": other_faculty["id"]},
+            headers=admin_headers,
+        )
+        self.assertEqual(updated_manager.status_code, 200, updated_manager.text)
+        self.assertEqual(
+            updated_manager.json()["managed_department_id"], other_faculty["id"]
+        )
+
+        hr = self.login("hr")
+        hr_headers = {"X-CSRF-Token": hr["csrf_token"]}
+        scoped_request = self.client.post(
+            f"/teachers/{in_scope_teacher['id']}/change-requests",
+            json={
+                "change_type": "department_transfer",
+                "current_value": {},
+                "proposed_value": {"department_id": other_faculty["id"]},
+                "reason": "Scoped request",
+                "effective_on": (date.today() + timedelta(days=1)).isoformat(),
+            },
+            headers=hr_headers,
+        )
+        self.assertEqual(scoped_request.status_code, 201, scoped_request.text)
+        scoped_request = scoped_request.json()
+        outside_request = self.client.post(
+            f"/teachers/{outside_teacher['id']}/change-requests",
+            json={
+                "change_type": "academic_degree",
+                "current_value": {},
+                "proposed_value": {"academic_degree": "Doctor"},
+                "reason": "Outside request",
+            },
+            headers=hr_headers,
+        )
+        self.assertEqual(outside_request.status_code, 201, outside_request.text)
+        outside_request = outside_request.json()
+        manager = self.login("manager")
+        manager_headers = {"X-CSRF-Token": manager["csrf_token"]}
+        with self.client.app.state.session_factory() as db:
+            manager_user = db.scalar(
+                select(User).where(User.username == "manager")
+            )
+            db.add_all(
+                [
+                    Notification(
+                        user_id=manager_user.id,
+                        event_key="legacy-null-scope",
+                        title="Legacy unscoped manager notification",
+                        message="Must not cross the new faculty boundary.",
+                        level="info",
+                        target_view="reports",
+                    ),
+                    Notification(
+                        user_id=manager_user.id,
+                        event_key="other-faculty-scope",
+                        title="Other faculty notification",
+                        message="Must stay hidden after reassignment.",
+                        level="info",
+                        target_view="reports",
+                        manager_faculty_id=other_faculty["id"],
+                    ),
+                ]
+            )
+            db.commit()
+        visible_departments = self.client.get(
+            "/departments", headers=manager_headers
+        ).json()
+        visible_department_ids = {item["id"] for item in visible_departments}
+        self.assertEqual(
+            visible_department_ids,
+            {self.department_id, child["id"], grandchild["id"]},
+        )
+        summary = self.client.get("/reports/summary", headers=manager_headers)
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(summary.json()["total_teachers"], 1)
+        self.assertEqual(
+            summary.json()["filters"]["faculty_scope_id"], self.department_id
+        )
+        root_filtered_summary = self.client.get(
+            "/reports/summary",
+            params={"department_id": self.department_id},
+            headers=manager_headers,
+        )
+        self.assertEqual(root_filtered_summary.status_code, 200)
+        self.assertEqual(root_filtered_summary.json()["total_teachers"], 1)
+        child_filtered_summary = self.client.get(
+            "/reports/summary",
+            params={"department_id": child["id"]},
+            headers=manager_headers,
+        )
+        self.assertEqual(child_filtered_summary.status_code, 200)
+        self.assertEqual(child_filtered_summary.json()["total_teachers"], 1)
+        manager_notifications = self.client.get(
+            "/notifications", headers=manager_headers
+        ).json()
+        self.assertNotIn(
+            "Legacy unscoped manager notification",
+            [item["title"] for item in manager_notifications],
+        )
+        self.assertNotIn(
+            "Other faculty notification",
+            [item["title"] for item in manager_notifications],
+        )
+        self.assertIn(
+            in_scope_teacher["id"],
+            {
+                int(item["target_id"])
+                for item in manager_notifications
+                if item["title"] == "Nhân sự mới thuộc đơn vị phụ trách"
+            },
+        )
+        self.assertNotIn(
+            outside_teacher["id"],
+            {
+                int(item["target_id"])
+                for item in manager_notifications
+                if item["title"] == "Nhân sự mới thuộc đơn vị phụ trách"
+            },
+        )
+        outside_report = self.client.get(
+            "/reports/summary",
+            params={"department_id": other_faculty["id"]},
+            headers=manager_headers,
+        )
+        self.assertEqual(outside_report.status_code, 403)
+        outside_export = self.client.get(
+            "/reports/export.xlsx",
+            params={"department_id": other_faculty["id"]},
+            headers=manager_headers,
+        )
+        self.assertEqual(outside_export.status_code, 403)
+        requests = self.client.get("/change-requests", headers=manager_headers)
+        self.assertEqual(requests.status_code, 200, requests.text)
+        visible_request_ids = {item["id"] for item in requests.json()}
+        self.assertIn(scoped_request["id"], visible_request_ids)
+        self.assertNotIn(outside_request["id"], visible_request_ids)
+        denied_decision = self.client.post(
+            f"/change-requests/{outside_request['id']}/decision",
+            json={"action": "reject", "reason": "Outside my faculty."},
+            headers=manager_headers,
+        )
+        self.assertEqual(denied_decision.status_code, 403)
+        outgoing_decision = self.client.post(
+            f"/change-requests/{scoped_request['id']}/decision",
+            json={
+                "action": "approve",
+                "reason": "Approve transfer outside faculty.",
+            },
+            headers=manager_headers,
+        )
+        self.assertEqual(outgoing_decision.status_code, 200, outgoing_decision.text)
+
+        manager_export = self.client.get(
+            "/reports/export.xlsx", headers=manager_headers
+        )
+        self.assertEqual(manager_export.status_code, 200, manager_export.text)
+        workbook = load_workbook(BytesIO(manager_export.content), read_only=True)
+        report_rows = list(workbook["Tong hop"].iter_rows(values_only=True))
+        self.assertIn(("Tổng giảng viên", 0), report_rows)
+        workbook.close()
+
+        with self.client.app.state.session_factory() as db:
+            manager_user = db.scalar(
+                select(User).where(User.username == "manager")
+            )
+            assigned_faculty = db.get(Department, self.department_id)
+            second_faculty = db.get(Department, other_faculty["id"])
+            manager_user.managed_departments = [assigned_faculty, second_faculty]
+            db.commit()
+        self.assertEqual(
+            self.client.get("/departments", headers=manager_headers).json(), []
+        )
+        self.assertEqual(
+            self.client.get(
+                "/reports/summary", headers=manager_headers
+            ).json()["total_teachers"],
+            0,
+        )
 
     def test_contract_alerts_checklist_and_protected_upload(self) -> None:
         teacher_id = self.create_teacher().json()["id"]

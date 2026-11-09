@@ -83,7 +83,13 @@ class FrontendBrowserTests(unittest.TestCase):
                 password_hash=hash_password(password),
                 role="manager",
             )
-            db.add_all([hr_user, manager_user])
+            admin_user = User(
+                username="browser-admin",
+                full_name="Browser Admin",
+                password_hash=hash_password(password),
+                role="admin",
+            )
+            db.add_all([hr_user, manager_user, admin_user])
             db.flush()
             db.add(
                 Notification(
@@ -97,6 +103,14 @@ class FrontendBrowserTests(unittest.TestCase):
             )
             department = Department(code="UI-TEST", name="Browser test unit")
             db.add(department)
+            db.flush()
+            db.add(
+                Department(
+                    code="UI-TEST-CHILD",
+                    name="Browser test subunit",
+                    parent_id=department.id,
+                )
+            )
             checklist_item = ChecklistItem(
                 code="browser-test-item",
                 label="Browser test checklist item",
@@ -122,6 +136,7 @@ class FrontendBrowserTests(unittest.TestCase):
                 for index in range(1, 28)
             )
             db.commit()
+            cls.department_id = department.id
             cls.checklist_item_id = checklist_item.id
         cls.password = password
 
@@ -200,6 +215,53 @@ class FrontendBrowserTests(unittest.TestCase):
         expect(notification).to_contain_text("Thông báo kiểm thử giao diện")
         self.page.locator("#notif-read").click()
         expect(badge).to_have_class("notif-badge hidden")
+
+    def test_manager_account_form_selects_one_root_faculty(self) -> None:
+        admin_page = self.browser.new_page()
+        try:
+            admin_page.goto(self.base_url)
+            admin_page.locator('#login-form [name="username"]').fill(
+                "browser-admin"
+            )
+            admin_page.locator('#login-form [name="password"]').fill(self.password)
+            admin_page.locator("#login-form button[type=submit]").click()
+            expect(admin_page.locator("#profile-role")).to_have_text(
+                "Quản trị viên"
+            )
+            admin_page.locator('.nav-link[data-view="accounts"]').click()
+            role = admin_page.locator(
+                '.admin-account-form select[name="role"]'
+            )
+            role.select_option("manager")
+            department = admin_page.locator(
+                '.admin-account-form select[name="managed_department_id"]'
+            )
+            expect(department).to_be_visible()
+            expect(department).to_have_attribute("required", "")
+            self.assertIsNone(department.get_attribute("multiple"))
+            self.assertEqual(department.locator("option").count(), 2)
+            self.assertEqual(
+                department.locator("option").nth(1).text_content(),
+                "Browser test unit",
+            )
+            manager_id = next(
+                user["id"]
+                for user in admin_page.request.get(
+                    f"{self.base_url}/users"
+                ).json()
+                if user["username"] == "browser-manager"
+            )
+            admin_page.locator(
+                f'#workspace-rows [data-action="edit-account"][data-id="{manager_id}"]'
+            ).click()
+            edit_department = admin_page.locator(
+                '#account-form select[name="managed_department_id"]'
+            )
+            expect(edit_department).to_be_visible()
+            expect(edit_department).to_have_value(str(self.department_id))
+            self.assertIsNone(edit_department.get_attribute("multiple"))
+        finally:
+            admin_page.close()
 
     def test_checklist_edit_uses_an_in_app_form(self) -> None:
         self.page.locator('.nav-link[data-view="teachers"]').click()

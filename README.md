@@ -32,7 +32,7 @@ Lệnh bootstrap chỉ dùng để tạo tài khoản quản trị viên đầu 
 
 - **Quản trị viên (`admin`)**: tạo/khóa tài khoản, gán vai trò và xem nhật ký. Không mặc nhiên có quyền xem/sửa hồ sơ hoặc duyệt thay đổi nghiệp vụ.
 - **Nhân viên nhân sự (`hr`)**: quản lý hồ sơ/đơn vị, hợp đồng, bằng cấp, tài liệu và checklist; gửi và theo dõi yêu cầu thay đổi của mình.
-- **Người quản lý (`manager`)**: xem số liệu tổng hợp, xem và xử lý yêu cầu đang chờ. Không được duyệt yêu cầu do chính mình tạo.
+- **Người quản lý (`manager`)**: mỗi tài khoản phụ trách một khoa gốc; có thể có nhiều tài khoản trưởng/phó cùng khoa. Chỉ xem số liệu, đơn vị và yêu cầu thuộc khoa được gán cùng các đơn vị con; được xử lý yêu cầu của giảng viên hiện thuộc phạm vi đó, không được duyệt yêu cầu do chính mình tạo. Manager của khoa hiện tại có thể duyệt đề xuất chuyển giảng viên ra ngoài khoa mình.
 - **Giảng viên (`lecturer`)**: admin tạo tài khoản và liên kết với hồ sơ có sẵn; giảng viên chỉ xem hồ sơ của mình, nộp/tải tài liệu minh chứng và không sửa dữ liệu chính thức.
 
 Quyền được kiểm tra ở API. Tác vụ thay đổi yêu cầu session cookie và CSRF token. Mật khẩu được băm PBKDF2-HMAC-SHA256; sau nhiều lần đăng nhập sai tài khoản sẽ tạm khóa.
@@ -61,7 +61,7 @@ Cookie session và CSRF tự bật thuộc tính `Secure` khi ứng dụng nhậ
 - Kết quả phân tích chỉ là gợi ý cho HR đối chiếu với tệp gốc, không xác minh tính xác thực, không đổi trạng thái duyệt/checklist và không cập nhật hồ sơ. Kết quả không được lưu; audit chỉ ghi người thực hiện, mã tài liệu, định dạng hoặc mã lỗi, không ghi nội dung trích xuất. Hiện chỉ dùng dữ liệu thử nghiệm, không dùng tài liệu nhân sự thật.
 - Danh sách phát hiện hồ sơ và cảnh báo chi tiết chỉ dành cho HR qua API; vai trò quản lý tiếp tục chỉ xem báo cáo tổng hợp theo quyền hiện có.
 - Nhật ký API không có thao tác sửa/xóa; audit ghi người dùng, thời điểm, loại thao tác, đối tượng và kết quả.
-- Thông báo được lưu theo tài khoản trong cơ sở dữ liệu, có trạng thái đã đọc/chưa đọc; Manager chỉ nhận thông báo nhân sự trong các đơn vị được Admin gán ở phần quản trị tài khoản.
+- Thông báo được lưu theo tài khoản trong cơ sở dữ liệu, có trạng thái đã đọc/chưa đọc; Manager chỉ nhận thông báo nhân sự thuộc khoa được Admin gán và các đơn vị con của khoa đó.
 
 ## Dữ liệu mẫu
 
@@ -75,7 +75,7 @@ Script hỏi thông tin đăng nhập admin nếu chưa có biến môi trườn
 
 Script tạo khoa/bộ môn, 32 hồ sơ giảng viên, bằng cấp/chứng chỉ, hợp đồng, quá trình công tác, checklist, tài liệu minh chứng, yêu cầu thay đổi, thông báo và nhật ký hoạt động. Mã hồ sơ và mã dữ liệu có tiền tố `DEMO-`; chạy lại sẽ nhận diện các bản ghi demo đã có thay vì tạo bản sao. Mật khẩu cho các tài khoản demo được tạo ngẫu nhiên và in ở cuối mỗi lần chạy. Để bảo đảm mật khẩu có thể xem lại, mỗi lần chạy script sẽ đặt lại mật khẩu các tài khoản demo; lưu lại kết quả trước khi thoát.
 
-Các tài khoản được tạo: `hr_demo1`, `hr_demo2` (nhân sự); `manager_demo1`, `manager_demo2` (quản lý); `hr_demolocked` (nhân sự đã khóa); và `lecturer_demo1` (giảng viên). Tài khoản giảng viên được liên kết với hồ sơ `DEMO-GV-001` — Nguyễn An Bình — có sẵn trong dữ liệu demo, không tạo hồ sơ trùng. Mật khẩu không được lưu trong script hoặc repository. Đăng nhập bằng từng tài khoản đang hoạt động để xem đúng giao diện theo vai trò.
+Các tài khoản được tạo: `hr_demo1`, `hr_demo2` (nhân sự); `manager_demo1`, `manager_demo2`, `manager_demo3` (quản lý, mỗi tài khoản phụ trách một khoa demo); `hr_demolocked` (nhân sự đã khóa); và `lecturer_demo1` (giảng viên). Tài khoản giảng viên được liên kết với hồ sơ `DEMO-GV-001` — Nguyễn An Bình — có sẵn trong dữ liệu demo, không tạo hồ sơ trùng. Mật khẩu không được lưu trong script hoặc repository. Đăng nhập bằng từng tài khoản đang hoạt động để xem đúng giao diện theo vai trò.
 
 Tệp [sample_data/mau_nhap_giang_vien.xlsx](sample_data/mau_nhap_giang_vien.xlsx) dùng đúng hàng tiêu đề tải từ API mẫu nhập, gồm 10 dòng hợp lệ và 3 dòng lỗi có chủ ý để thử chức năng **Nhập Excel**. Script tạo mới/cập nhật tệp này trong mỗi lần chạy. Để xem dữ liệu: mở **Tổng quan** và **Báo cáo thống kê** để xem biểu đồ/cảnh báo; dùng tài khoản HR mở **Hồ sơ giảng viên** và các tab chi tiết; vào **Khoa & bộ môn**, **Yêu cầu thay đổi**, **Quản trị hệ thống** và **Nhật ký hoạt động** để xem các nhóm còn lại. Quản lý xem báo cáo và xử lý yêu cầu; tài khoản admin chỉ quản trị tài khoản và xem nhật ký theo quyền hiện có.
 

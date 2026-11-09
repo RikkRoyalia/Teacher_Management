@@ -26,7 +26,13 @@ DEMO_ACCOUNTS = (
     ("hr_demo2", "Nhân viên nhân sự demo 2", "hr", False),
     ("manager_demo1", "Người quản lý demo 1", "manager", False),
     ("manager_demo2", "Người quản lý demo 2", "manager", False),
+    ("manager_demo3", "Người quản lý demo 3", "manager", False),
     ("hr_demolocked", "Tài khoản nhân sự demo đã khóa", "hr", True),
+)
+MANAGER_DEMO_FACULTIES = (
+    ("manager_demo1", "Người quản lý demo 1", "DEMO-KHOA-CNTT"),
+    ("manager_demo2", "Người quản lý demo 2", "DEMO-KHOA-KT"),
+    ("manager_demo3", "Người quản lý demo 3", "DEMO-KHOA-NN"),
 )
 DEMO_LECTURER_ACCOUNTS = (("lecturer_demo1", "DEMO-GV-001"),)
 DEGREES = ("Cử nhân", "Thạc sĩ", "Tiến sĩ", "Phó giáo sư")
@@ -176,7 +182,9 @@ def write_sample_workbook(headers: list[str], department_code: str) -> None:
     workbook.save(SAMPLE_WORKBOOK)
 
 
-def demo_departments(api: Api) -> tuple[list[dict[str, Any]], str]:
+def demo_departments(
+    api: Api,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str]:
     department_specs = (
         ("DEMO-KHOA-CNTT", "Khoa Công nghệ thông tin", None),
         ("DEMO-KHOA-KT", "Khoa Kinh tế", None),
@@ -259,7 +267,59 @@ def demo_departments(api: Api) -> tuple[list[dict[str, Any]], str]:
         print("  Đã ngừng hoạt động đơn vị demo.")
     else:
         print("  Đơn vị ngừng hoạt động đã có.")
-    return units, units[0]["code"]
+    return units, faculties, units[0]["code"]
+
+
+def ensure_manager_accounts(
+    api: Api,
+    faculties: dict[str, dict[str, Any]],
+    passwords: dict[str, str],
+) -> None:
+    existing_users = {
+        user["username"]: user for user in api.request("GET", "/users").json()
+    }
+    for username, full_name, faculty_code in MANAGER_DEMO_FACULTIES:
+        password = new_demo_password()
+        faculty_id = faculties[faculty_code]["id"]
+        user = existing_users.get(username)
+        if user is None:
+            user = api.request(
+                "POST",
+                "/users",
+                json={
+                    "username": username,
+                    "full_name": full_name,
+                    "password": password,
+                    "role": "manager",
+                    "managed_department_id": faculty_id,
+                },
+            ).json()
+            print(f"  Đã tạo tài khoản demo: {username} (manager).")
+        else:
+            changes: dict[str, Any] = {}
+            if user["full_name"] != full_name:
+                changes["full_name"] = full_name
+            if user["role"] != "manager":
+                changes["role"] = "manager"
+            if user.get("teacher_id") is not None:
+                changes["teacher_id"] = None
+            if user.get("managed_department_id") != faculty_id:
+                changes["managed_department_id"] = faculty_id
+            if changes:
+                user = api.request(
+                    "PATCH", f"/users/{user['id']}", json=changes
+                ).json()
+            api.request(
+                "POST",
+                f"/users/{user['id']}/reset-password",
+                json={"new_password": password},
+            )
+            print(f"  Tài khoản demo đã có, đã đặt lại mật khẩu: {username}.")
+        if not user["is_active"]:
+            api.request(
+                "PATCH", f"/users/{user['id']}", json={"is_active": True}
+            )
+        passwords[username] = password
 
 
 def teacher_specs(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -758,9 +818,10 @@ def ensure_documents(
 
 def ensure_change_requests(
     hr_api: Api,
-    manager_apis: tuple[Api, Api],
+    manager_apis: dict[int, Api],
     teachers: dict[str, dict[str, Any]],
     units: list[dict[str, Any]],
+    faculty_by_department_id: dict[int, int],
 ) -> None:
     current_requests = hr_api.request("GET", "/change-requests").json()
     demo_requests = {
@@ -768,9 +829,8 @@ def ensure_change_requests(
         for item in current_requests
         if item["reason"].startswith("DEMO-YEUCAU-")
     }
-    manager_one, manager_two = manager_apis
-    managers = (manager_one, manager_two)
     teacher_values = list(teachers.values())
+    teachers_by_id = {teacher["id"]: teacher for teacher in teacher_values}
     today = date.today()
     created = 0
     processed = 0
@@ -836,7 +896,9 @@ def ensure_change_requests(
             created += 1
         if item["status"] != "pending" or target_status == "pending":
             continue
-        manager = managers[(number - 1) % len(managers)]
+        request_teacher = teachers_by_id[item["teacher_id"]]
+        faculty_id = faculty_by_department_id[request_teacher["department_id"]]
+        manager = manager_apis[faculty_id]
         manager.request(
             "POST",
             f"/change-requests/{item['id']}/decision",
@@ -929,6 +991,8 @@ def main() -> int:
             user["username"]: user for user in admin_api.request("GET", "/users").json()
         }
         for username, full_name, role, is_locked in DEMO_ACCOUNTS:
+            if role == "manager":
+                continue
             password = new_demo_password()
             user = existing_users.get(username)
             if user is None:
@@ -967,6 +1031,8 @@ def main() -> int:
                 ).json()
             admin_passwords[username] = password
         for username, _, _, is_locked in DEMO_ACCOUNTS:
+            if username.startswith("manager_demo"):
+                continue
             user = next(
                 item
                 for item in admin_api.request("GET", "/users").json()
@@ -984,7 +1050,15 @@ def main() -> int:
         hr_api = Api(hr_client)
         hr_api.login("hr_demo1", admin_passwords["hr_demo1"])
         print("Nhóm khoa và bộ môn:")
-        units, sample_department_code = demo_departments(hr_api)
+        units, faculties, sample_department_code = demo_departments(hr_api)
+        with httpx.Client(base_url=base_url, timeout=60) as manager_admin_client:
+            manager_admin_api = Api(manager_admin_client)
+            manager_admin_api.login(admin_user, admin_password)
+            ensure_manager_accounts(
+                manager_admin_api,
+                faculties,
+                admin_passwords,
+            )
 
         print("Nhóm hồ sơ giảng viên:")
         specs = teacher_specs(units)
@@ -1014,25 +1088,32 @@ def main() -> int:
         ensure_documents(hr_api, teachers, qualifications, contracts)
 
         print("Nhóm yêu cầu thay đổi:")
-        manager_apis = []
+        manager_apis: dict[int, Api] = {}
         manager_clients = []
-        for username in ("manager_demo1", "manager_demo2"):
+        faculty_by_department_id = {
+            faculty["id"]: faculty["id"] for faculty in faculties.values()
+        }
+        faculty_by_department_id.update(
+            {unit["id"]: unit["parent_id"] for unit in units}
+        )
+        for username, _, faculty_code in MANAGER_DEMO_FACULTIES:
             client = httpx.Client(base_url=base_url, timeout=60)
             manager_clients.append(client)
             manager_api = Api(client)
             manager_api.login(username, admin_passwords[username])
-            manager_apis.append(manager_api)
+            manager_apis[faculties[faculty_code]["id"]] = manager_api
         try:
             ensure_change_requests(
                 hr_api,
-                (manager_apis[0], manager_apis[1]),
+                manager_apis,
                 teachers,
                 units,
+                faculty_by_department_id,
             )
 
             print("Nhóm thông báo và báo cáo:")
             hr_notifications = hr_api.request("GET", "/notifications").json()
-            manager_notifications = manager_apis[0].request(
+            manager_notifications = next(iter(manager_apis.values())).request(
                 "GET", "/notifications"
             ).json()
             summary = hr_api.request("GET", "/reports/summary").json()
@@ -1080,12 +1161,20 @@ def main() -> int:
 
     record_failed_logins(
         base_url,
-        ["hr_demo1", "hr_demo2", "manager_demo1", "manager_demo2", admin_user],
+        [
+            "hr_demo1",
+            "hr_demo2",
+            "manager_demo1",
+            "manager_demo2",
+            "manager_demo3",
+            admin_user,
+        ],
         {
             "hr_demo1": admin_passwords["hr_demo1"],
             "hr_demo2": admin_passwords["hr_demo2"],
             "manager_demo1": admin_passwords["manager_demo1"],
             "manager_demo2": admin_passwords["manager_demo2"],
+            "manager_demo3": admin_passwords["manager_demo3"],
             admin_user: admin_password,
         },
     )

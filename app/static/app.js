@@ -1639,8 +1639,8 @@ async function renderAccounts() {
     ],
   });
   const managerDepartmentField = inputField({
-    name: "managed_department_ids",
-    label: "Đơn vị phụ trách (có thể chọn nhiều)",
+    name: "managed_department_id",
+    label: "Khoa phụ trách (bắt buộc với Manager)",
     type: "select",
     options: managerDepartments.map((department) => [
       String(department.id),
@@ -1649,11 +1649,6 @@ async function renderAccounts() {
   });
   const managerDepartmentSelect =
     managerDepartmentField.querySelector("select");
-  managerDepartmentSelect.multiple = true;
-  managerDepartmentSelect.size = Math.min(
-    Math.max(managerDepartments.length, 2),
-    5,
-  );
   managerDepartmentField.classList.add("hidden");
   const linkableTeachers = await api("/users/linkable-teachers");
   const teacherLink = inputField({
@@ -1671,10 +1666,9 @@ async function renderAccounts() {
     const isLecturer = role.querySelector("select").value === "lecturer";
     teacherLink.classList.toggle("hidden", !isLecturer);
     teacherLink.querySelector("select").required = isLecturer;
-    managerDepartmentField.classList.toggle(
-      "hidden",
-      role.querySelector("select").value !== "manager",
-    );
+    const isManager = role.querySelector("select").value === "manager";
+    managerDepartmentField.classList.toggle("hidden", !isManager);
+    managerDepartmentSelect.required = isManager;
   };
   role.querySelector("select").addEventListener("change", syncCreateTeacherLink);
   syncCreateTeacherLink();
@@ -1698,12 +1692,10 @@ async function renderAccounts() {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries(new FormData(form));
-    values.managed_department_ids =
+    values.managed_department_id =
       values.role === "manager"
-        ? [...managerDepartmentSelect.selectedOptions].map((option) =>
-            Number(option.value),
-          )
-        : [];
+        ? Number(managerDepartmentSelect.value)
+        : null;
     if (values.role === "lecturer") {
       values.teacher_id = Number(values.teacher_id);
     } else {
@@ -1763,7 +1755,7 @@ async function renderAccounts() {
         "Tên tài khoản",
         "Họ tên",
         "Vai trò",
-        "Đơn vị phụ trách",
+        "Khoa phụ trách",
         "Trạng thái",
         "Tạo lúc",
         "Thao tác",
@@ -1772,10 +1764,10 @@ async function renderAccounts() {
         user.username,
         user.full_name,
         roleLabels[user.role] || user.role,
-        (user.managed_department_ids || [])
-          .map((id) => departmentNames.get(id))
-          .filter(Boolean)
-          .join(", ") || "—",
+        user.role === "manager" &&
+        !departmentNames.has(user.managed_department_id)
+          ? "Chưa gán khoa"
+          : departmentNames.get(user.managed_department_id) || "—",
         badge(
           user.is_active ? "active" : "ended",
           user.is_active ? "Đang hoạt động" : "Đã khóa",
@@ -1799,7 +1791,7 @@ async function openAccountModal(user) {
   form.elements.username.value = user.username;
   form.elements.full_name.value = user.full_name;
   form.elements.role.value = user.role;
-  const managerDepartmentSelect = form.elements.managed_department_ids;
+  const managerDepartmentSelect = form.elements.managed_department_id;
   const managerDepartmentField = $("#account-manager-departments-field");
   const managerDepartments = await api("/users/manager-departments");
   managerDepartmentSelect.replaceChildren(
@@ -1811,14 +1803,9 @@ async function openAccountModal(user) {
         ),
     ),
   );
-  const assignedDepartmentIds = new Set(user.managed_department_ids || []);
-  [...managerDepartmentSelect.options].forEach((option) => {
-    option.selected = assignedDepartmentIds.has(Number(option.value));
-  });
-  managerDepartmentSelect.size = Math.min(
-    Math.max(managerDepartments.length, 2),
-    5,
-  );
+  managerDepartmentSelect.value = user.managed_department_id
+    ? String(user.managed_department_id)
+    : "";
   const teacherSelect = form.elements.teacher_id;
   const linkField = $("#account-teacher-link-field");
   const teachers = await api(`/users/linkable-teachers?user_id=${user.id}`);
@@ -1836,10 +1823,9 @@ async function openAccountModal(user) {
     const isLecturer = form.elements.role.value === "lecturer";
     linkField.classList.toggle("hidden", !isLecturer);
     teacherSelect.required = isLecturer;
-    managerDepartmentField.classList.toggle(
-      "hidden",
-      form.elements.role.value !== "manager",
-    );
+    const isManager = form.elements.role.value === "manager";
+    managerDepartmentField.classList.toggle("hidden", !isManager);
+    managerDepartmentSelect.required = isManager;
   };
   form.elements.role.onchange = syncEditTeacherLink;
   syncEditTeacherLink();
@@ -2244,18 +2230,10 @@ function bindEvents() {
         form.elements.role.value === "lecturer"
           ? Number(form.elements.teacher_id.value)
           : null,
-      managed_department_ids:
+      managed_department_id:
         form.elements.role.value === "manager"
-          ? [...form.elements.managed_department_ids.selectedOptions].map(
-              (option) => Number(option.value),
-            )
-          : [],
-      managed_department_ids:
-        form.elements.role.value === "manager"
-          ? [...form.elements.managed_department_ids.selectedOptions].map(
-              (option) => Number(option.value),
-            )
-          : [],
+          ? Number(form.elements.managed_department_id.value)
+          : null,
     };
     try {
       await updateAccount(userId, payload);

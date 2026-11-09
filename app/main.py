@@ -149,6 +149,7 @@ def _create_notification(
     level: str,
     view: str,
     target_id: int | str | None = None,
+    manager_faculty_id: int | None = None,
 ) -> None:
     exists = db.scalar(
         select(Notification.id).where(
@@ -166,6 +167,7 @@ def _create_notification(
                 level=level,
                 target_view=view,
                 target_id=str(target_id) if target_id is not None else None,
+                manager_faculty_id=manager_faculty_id,
             )
         )
 
@@ -193,6 +195,67 @@ def _notify_roles(
         )
 
 
+def _department_parent_map(db: Session) -> dict[int, int | None]:
+    return dict(db.execute(select(Department.id, Department.parent_id)).all())
+
+
+def _department_tree_ids(
+    db: Session,
+    root_department_id: int,
+    parent_map: dict[int, int | None] | None = None,
+) -> set[int]:
+    parents = parent_map if parent_map is not None else _department_parent_map(db)
+    if root_department_id not in parents:
+        return set()
+    children: dict[int, list[int]] = {}
+    for department_id, parent_id in parents.items():
+        if parent_id is not None:
+            children.setdefault(parent_id, []).append(department_id)
+    descendants = {root_department_id}
+    pending = [root_department_id]
+    while pending:
+        current_id = pending.pop()
+        for child_id in children.get(current_id, []):
+            if child_id not in descendants:
+                descendants.add(child_id)
+                pending.append(child_id)
+    return descendants
+
+
+def _manager_faculty_id(manager: User) -> int | None:
+    assigned = manager.managed_departments
+    if len(assigned) != 1:
+        return None
+    faculty = assigned[0]
+    if faculty.parent_id is not None or not faculty.is_active:
+        return None
+    return faculty.id
+
+
+def _manager_scope_ids(db: Session, manager: User) -> set[int]:
+    faculty_id = _manager_faculty_id(manager)
+    if faculty_id is None:
+        return set()
+    return _department_tree_ids(db, faculty_id)
+
+
+def _manager_faculty_for_assignment(db: Session, department_id: int) -> Department:
+    department = db.get(Department, department_id)
+    if department is None:
+        raise HTTPException(status_code=404, detail="Faculty not found.")
+    if department.parent_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Manager accounts must be assigned a root faculty.",
+        )
+    if not department.is_active:
+        raise HTTPException(
+            status_code=422,
+            detail="Manager accounts must be assigned an active faculty.",
+        )
+    return department
+
+
 def _notify_managers(
     db: Session,
     department_ids: set[int],
@@ -205,20 +268,51 @@ def _notify_managers(
 ) -> None:
     if not department_ids:
         return
+    parent_map = _department_parent_map(db)
+    faculty_ids: set[int] = set()
+    for department_id in department_ids:
+        current_id: int | None = department_id
+        visited: set[int] = set()
+        while current_id is not None and current_id in parent_map:
+            if current_id in visited:
+                break
+            visited.add(current_id)
+            parent_id = parent_map[current_id]
+            if parent_id is None:
+                faculty_ids.add(current_id)
+                break
+            current_id = parent_id
+    if not faculty_ids:
+        return
     statement = (
-        select(User.id)
+        select(User)
         .join(User.managed_departments)
         .where(
             User.role == "manager",
             User.is_active.is_(True),
-            Department.id.in_(department_ids),
+            Department.id.in_(faculty_ids),
+            Department.parent_id.is_(None),
+            Department.is_active.is_(True),
         )
     )
     if exclude_user_id is not None:
         statement = statement.where(User.id != exclude_user_id)
-    for user_id in set(db.scalars(statement)):
+    for manager in db.scalars(statement).unique():
+        faculty_id = _manager_faculty_id(manager)
+        if faculty_id is None or faculty_id not in faculty_ids:
+            continue
+        if not _manager_scope_ids(db, manager).intersection(department_ids):
+            continue
         _create_notification(
-            db, user_id, event_key, title, message, "info", view, target_id
+            db,
+            manager.id,
+            event_key,
+            title,
+            message,
+            "info",
+            view,
+            target_id,
+            manager_faculty_id=faculty_id,
         )
 
 
@@ -620,7 +714,12 @@ def create_app(
                 "is_active": department.is_active,
             }
             for department in db.scalars(
-                select(Department).order_by(Department.name, Department.id)
+                select(Department)
+                .where(
+                    Department.parent_id.is_(None),
+                    Department.is_active.is_(True),
+                )
+                .order_by(Department.name, Department.id)
             )
         ]
 
@@ -657,15 +756,11 @@ def create_app(
     def create_user(payload: UserCreate, db: DbSession, actor: ADMIN_USER) -> User:
         if payload.teacher_id is not None:
             _require_linkable_teacher(db, payload.teacher_id)
-        managed_departments = list(
-            db.scalars(
-                select(Department).where(
-                    Department.id.in_(payload.managed_department_ids)
-                )
-            )
-        ) if payload.managed_department_ids else []
-        if len(managed_departments) != len(payload.managed_department_ids):
-            raise HTTPException(status_code=404, detail="Department not found.")
+        managed_departments = (
+            [_manager_faculty_for_assignment(db, payload.managed_department_id)]
+            if payload.managed_department_id is not None
+            else []
+        )
         user = User(
             username=payload.username.lower(),
             full_name=payload.full_name,
@@ -738,7 +833,10 @@ def create_app(
             raise HTTPException(status_code=404, detail="User not found.")
         was_active = target.is_active
         changes = payload.model_dump(exclude_unset=True)
-        managed_department_ids = changes.pop("managed_department_ids", None)
+        managed_department_id = changes.pop("managed_department_id", None)
+        has_manager_department = (
+            "managed_department_id" in payload.model_fields_set
+        )
         role = changes.get("role", target.role)
         teacher_id = changes.get("teacher_id", target.teacher_id)
         if role == "lecturer":
@@ -753,18 +851,27 @@ def create_app(
                 status_code=422,
                 detail="Only lecturer accounts can be linked to a teacher profile.",
             )
-        if role == "manager" and managed_department_ids is not None:
-            managed_departments = list(
-                db.scalars(
-                    select(Department).where(
-                        Department.id.in_(managed_department_ids)
+        if role == "manager":
+            if has_manager_department:
+                if managed_department_id is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Manager accounts must be assigned exactly one faculty.",
                     )
+                target.managed_departments = [
+                    _manager_faculty_for_assignment(db, managed_department_id)
+                ]
+            elif target.role != "manager":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Assign exactly one faculty before making this account a manager.",
                 )
-            ) if managed_department_ids else []
-            if len(managed_departments) != len(managed_department_ids):
-                raise HTTPException(status_code=404, detail="Department not found.")
-            target.managed_departments = managed_departments
-        elif role != "manager":
+        else:
+            if has_manager_department and managed_department_id is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Only manager accounts can be assigned a faculty.",
+                )
             target.managed_departments = []
         if target.id == actor.id and (
             changes.get("is_active") is False
@@ -869,6 +976,10 @@ def create_app(
         include_inactive: bool = False,
     ) -> list[Department]:
         statement = select(Department).order_by(Department.name, Department.id)
+        if actor.role == "manager":
+            statement = statement.where(
+                Department.id.in_(_manager_scope_ids(db, actor))
+            )
         if actor.role == "lecturer" or not include_inactive:
             statement = statement.where(Department.is_active.is_(True))
         return list(db.scalars(statement))
@@ -2105,6 +2216,14 @@ def create_app(
         db: DbSession,
         user: NOTIFICATION_USER,
     ) -> list[dict[str, Any]]:
+        statement = select(Notification).where(Notification.user_id == user.id)
+        if user.role == "manager":
+            faculty_id = _manager_faculty_id(user)
+            if faculty_id is None:
+                return []
+            statement = statement.where(
+                Notification.manager_faculty_id == faculty_id
+            )
         return [
             {
                 "id": item.id,
@@ -2117,9 +2236,9 @@ def create_app(
                 "is_read": item.is_read,
             }
             for item in db.scalars(
-                select(Notification)
-                .where(Notification.user_id == user.id)
-                .order_by(Notification.created_at.desc(), Notification.id.desc())
+                statement.order_by(
+                    Notification.created_at.desc(), Notification.id.desc()
+                )
             )
         ]
 
@@ -2161,14 +2280,28 @@ def create_app(
     @application.get("/reports/summary", tags=["reports"])
     def report_summary(
         db: DbSession,
-        _: HR_OR_MANAGER,
+        actor: HR_OR_MANAGER,
         department_id: int | None = Query(default=None, gt=0),
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> dict[str, Any]:
         if start_date and end_date and end_date < start_date:
             raise HTTPException(status_code=422, detail="End date cannot be before start date.")
-        filters = _report_teacher_filters(department_id, start_date, end_date)
+        if actor.role == "manager":
+            filters = _report_teacher_filters(None, start_date, end_date)
+            manager_scope = _manager_scope_ids(db, actor)
+            if department_id is not None:
+                if department_id not in manager_scope:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="This faculty is outside your assigned scope.",
+                    )
+                manager_scope &= _department_tree_ids(db, department_id)
+            filters.append(Teacher.department_id.in_(manager_scope))
+        else:
+            filters = _report_teacher_filters(
+                department_id, start_date, end_date
+            )
         filtered_teacher_ids = select(Teacher.id).where(*filters)
         total_teachers = db.scalar(
             select(func.count()).select_from(Teacher).where(*filters)
@@ -2232,13 +2365,17 @@ def create_app(
             ).all()
         )
 
+        report_filters = {
+            "department_id": department_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "date_basis": "teacher record creation date",
+        }
+        if actor.role == "manager":
+            report_filters["faculty_scope_id"] = _manager_faculty_id(actor)
+
         return {
-            "filters": {
-                "department_id": department_id,
-                "start_date": start_date,
-                "end_date": end_date,
-                "date_basis": "teacher record creation date",
-            },
+            "filters": report_filters,
             "total_teachers": total_teachers,
             "teachers_by_status": status_counts,
             "teachers_by_degree": degree_counts,
@@ -2261,7 +2398,16 @@ def create_app(
         summary = report_summary(db, actor, department_id, start_date, end_date)
         workbook = Workbook(write_only=True)
         sheet = workbook.create_sheet("Giang vien")
-        filters = _report_teacher_filters(department_id, start_date, end_date)
+        if actor.role == "manager":
+            filters = _report_teacher_filters(None, start_date, end_date)
+            manager_scope = _manager_scope_ids(db, actor)
+            if department_id is not None:
+                manager_scope &= _department_tree_ids(db, department_id)
+            filters.append(Teacher.department_id.in_(manager_scope))
+        else:
+            filters = _report_teacher_filters(
+                department_id, start_date, end_date
+            )
         sheet.append(["Báo cáo hồ sơ giảng viên"])
         sheet.append(["Điều kiện lọc", json.dumps(summary["filters"], ensure_ascii=False, default=str)])
         if actor.role == "hr":
@@ -2404,7 +2550,7 @@ def create_app(
                 statement = statement.where(ChangeRequest.status == "pending")
             statement = statement.join(
                 Teacher, ChangeRequest.teacher_id == Teacher.id
-            ).where(Teacher.department_id.in_(actor.managed_department_ids))
+            ).where(Teacher.department_id.in_(_manager_scope_ids(db, actor)))
         if state_filter:
             statement = statement.where(ChangeRequest.status == state_filter)
         items = list(db.scalars(statement.order_by(ChangeRequest.created_at.desc())))
@@ -2507,8 +2653,11 @@ def create_app(
         if item.requester_id == actor.id:
             raise HTTPException(status_code=403, detail="You cannot approve or process your own request.")
         teacher = _require_teacher(db, item.teacher_id)
-        if teacher.department_id not in set(actor.managed_department_ids):
-            raise HTTPException(status_code=403, detail="This request is outside your assigned departments.")
+        if teacher.department_id not in _manager_scope_ids(db, actor):
+            raise HTTPException(
+                status_code=403,
+                detail="This request is outside your assigned faculty.",
+            )
         previous_department_id = json.loads(item.current_value).get("department_id")
         claimed = db.execute(
             update(ChangeRequest)
@@ -2617,7 +2766,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Change request not found.")
         elif actor.role == "manager":
             teacher = db.get(Teacher, item.teacher_id)
-            if teacher.department_id not in set(actor.managed_department_ids):
+            if teacher.department_id not in _manager_scope_ids(db, actor):
                 raise HTTPException(status_code=403, detail="This request is outside your assigned departments.")
         events = db.scalars(
             select(ChangeRequestEvent)
